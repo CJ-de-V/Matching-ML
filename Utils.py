@@ -119,7 +119,6 @@ def perform_cuts(df: pd.DataFrame) -> pd.DataFrame:
 
     return df
 
-#.any.sum practically counts the number of unique mchIDs that have at least one true
 def inhousemetrics(df: pd.DataFrame, threshold: float = 0.5, metric: str = "score") -> tuple:
     idx = df.groupby("mchID")[metric].idxmax() # max score index in base df for each mchID group
     best = df.loc[idx].set_index("mchID") # best candidate for each mchID, indexed by mchID
@@ -155,14 +154,115 @@ def inhousemetrics(df: pd.DataFrame, threshold: float = 0.5, metric: str = "scor
     true_efficiency = N_gm_true_pairable/N_pairable if N_pairable > 0 else 0
     fake_efficiency = (N_gm_rec_pairable - N_gm_true_pairable)/N_pairable if N_pairable > 0 else 0
     rejection_efficiency = N_rejected_non_pairable/N_non_pairable if N_non_pairable > 0 else 0
-    # fake_efficiency_new_nomenclature = (N_gm_rec_pairable - N_gm_true_pairable)/(len(df.groupby("mchID").len())-N_pairable) if N_pairable > 0 else 0 # N_gm_rec - N_gm_rec_pairable = N_gm_nonpairable /
-    # Pivot to standard new nomenclature
-
 
     return pairing_purity, pairing_efficiency, true_efficiency, fake_efficiency, rejection_efficiency
 
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
 
+def plot_metrics_vs_feature(
+    df: pd.DataFrame,
+    feature: str,
+    threshold: float,
+    metrics_fn,
+    metric_col_prefix: str = "score",
+    n_bins: int = 10,
+    fmin: Optional[float] = None,
+    fmax: Optional[float] = None,
+):
+    """
+    Fixed-bin performance vs feature with simple binomial error bars.
+    """
 
+    # --- Define bins ---
+    # fmin, fmax = df[feature].min(), df[feature].max()
+
+    edges = np.linspace(fmin, fmax, n_bins + 1)
+
+    results = []
+
+    for i in range(n_bins):
+        low, high = edges[i], edges[i + 1]
+
+        if i == n_bins - 1:
+            df_bin = df[(df[feature] >= low) & (df[feature] <= high)]
+        else:
+            df_bin = df[(df[feature] >= low) & (df[feature] < high)]
+
+        N = len(df_bin)
+
+        if N == 0:
+            continue
+
+        metrics = metrics_fn(df_bin, threshold=threshold, metric=metric_col_prefix)
+
+        # Convert to safe numpy array
+        metrics = np.array(metrics, dtype=float)
+
+        # --- crude binomial uncertainty ---
+        with np.errstate(invalid='ignore'):
+            errors = np.sqrt(metrics * (1 - metrics) / N)
+
+        results.append({
+            "bin_low": low,
+            "bin_high": high,
+            "bin_center": 0.5 * (low + high),
+            "bin_width": 0.5 * (high - low),
+            "entries": N,
+            "pairing_purity": metrics[0],
+            "pairing_efficiency": metrics[1],
+            "true_efficiency": metrics[2],
+            "fake_efficiency": metrics[3],
+            "rejection_efficiency": metrics[4],
+            "err_pairing_purity": errors[0],
+            "err_pairing_efficiency": errors[1],
+            "err_true_efficiency": errors[2],
+            "err_fake_efficiency": errors[3],
+            "err_rejection_efficiency": errors[4],
+        })
+
+    result_df = pd.DataFrame(results)
+
+    # --- Plot ---
+    plt.figure(figsize=(9, 6))
+
+    metrics_list = [
+        "pairing_purity",
+        "pairing_efficiency",
+        "true_efficiency",
+        "fake_efficiency",
+        "rejection_efficiency",
+    ]
+
+    for col in metrics_list:
+        y = result_df[col]
+        yerr = result_df[f"err_{col}"]
+
+        # Skip if completely NaN (fixes your missing curve issue)
+        if y.isna().all():
+            print(f"[WARN] {col} is all NaN → skipped")
+            continue
+
+        plt.errorbar(
+            result_df["bin_center"],
+            y,
+            yerr=yerr,
+            xerr=result_df["bin_width"],
+            fmt='o',
+            capsize=3,
+            label=col,
+        )
+
+    plt.xlabel(feature)
+    plt.ylabel("Metric")
+    plt.title(f"Metrics vs {feature} (threshold={threshold})")
+    plt.legend()
+    plt.grid(True)
+
+    plt.show()
+
+    return result_df
 
 
 def build_match_groups(
