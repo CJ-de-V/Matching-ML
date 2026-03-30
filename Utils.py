@@ -1,7 +1,9 @@
 # Common utilities for the matching - used in both EDA & matching code
 import pandas as pd
 import numpy as np
+import matplotlib.pyplot as plt
 from hipe4ml.tree_handler import TreeHandler
+from typing import Optional
 
 DESIGNED_FEATURES = [
     "mchID",
@@ -23,6 +25,21 @@ NON_TRAINING_FEATURES = [
     'McMaskMCH', 'McMaskMFT', 'McMaskGlob',
     'MatchLabel', 'IsSignal'
     ]
+
+MATCH_LABEL_GROUPS = {
+    "Wrong match": [1, 5],
+    "Decay":       [2, 6],
+    "Fake":        [3, 7],
+    "True match":  [0, 4],
+}
+
+MATCH_COLOURS = {
+    "True match":  "steelblue",
+    "Wrong match": "tomato",
+    "Decay":       "mediumseagreen",
+    "Fake":        "goldenrod",
+}
+
 
 def get_dataframe(file_path: str) -> pd.DataFrame:
     df = TreeHandler(file_path, "O2fwdmlcand", folder_name='DF_*').get_data_frame()
@@ -103,8 +120,8 @@ def perform_cuts(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 #.any.sum practically counts the number of unique mchIDs that have at least one true
-def inhousemetrics(df: pd.DataFrame, threshold: float = 0.5) -> tuple:
-    idx = df.groupby("mchID")["score"].idxmax() # max score index in base df for each mchID group
+def inhousemetrics(df: pd.DataFrame, threshold: float = 0.5, metric: str = "score") -> tuple:
+    idx = df.groupby("mchID")[metric].idxmax() # max score index in base df for each mchID group
     best = df.loc[idx].set_index("mchID") # best candidate for each mchID, indexed by mchID
     pairable = df.groupby("mchID")["IsSignal"].any() # Boolean series indicating if each mchID group has at least one true match - indexed by mchID
     total = len(df.groupby("mchID").size())
@@ -114,20 +131,20 @@ def inhousemetrics(df: pd.DataFrame, threshold: float = 0.5) -> tuple:
 
     N_non_pairable = total - N_pairable 
 
-    N_gm_rec = (df.loc[idx, "score"] > threshold).sum()
+    N_gm_rec = (df.loc[idx, metric] > threshold).sum()
 
     N_gm_true = (
-        (best["score"] > threshold) &
+        (best[metric] > threshold) &
         (best["IsSignal"] == 1)
     ).sum()
 
     N_gm_rec_pairable = (
-        (best["score"] > threshold) &
+        (best[metric] > threshold) &
         pairable
     ).sum()
 
     N_rejected_non_pairable = (
-        (best["score"] <= threshold) &
+        (best[metric] <= threshold) &
         (~pairable)
     ).sum()
 
@@ -143,3 +160,131 @@ def inhousemetrics(df: pd.DataFrame, threshold: float = 0.5) -> tuple:
 
 
     return pairing_purity, pairing_efficiency, true_efficiency, fake_efficiency, rejection_efficiency
+
+
+
+
+
+def build_match_groups(
+    df: pd.DataFrame,
+    label_col: str = "MatchLabel",
+    label_groups: dict = MATCH_LABEL_GROUPS,
+) -> dict:
+    """
+    Split a dataframe into sub-dataframes by MatchLabel category.
+    Returns a dict of {label_name: sub-dataframe}.
+    Call once and pass the result to draw_feature().
+    """
+    return {
+        label: df[df[label_col].isin(codes)]
+        for label, codes in label_groups.items()
+    }
+
+
+def draw_feature(
+    feature: str,
+    match_groups: dict,
+    colours: dict = MATCH_COLOURS,
+    nbins: int = 100,
+    per: float = 0.0,
+    categorical_max_unique: int = 20,
+    density: bool = True,
+    title: Optional[str] = None,
+    save_path: Optional[str] = None,
+) -> None:
+    """
+    Plot a normalised histogram (continuous) or grouped bar chart (categorical)
+    of `feature`, broken down by match label category.
+
+    Parameters
+    ----------
+    feature               : Column name to plot.
+    match_groups          : Output of build_match_groups().
+    colours               : Dict mapping label name -> matplotlib colour.
+    nbins                 : Number of bins for continuous histograms.
+    per                   : Quantile to clip outliers at each end (e.g. 0.005).
+    categorical_max_unique: Columns with <= this many unique values are treated
+                            as categorical and shown as bar charts.
+    title                 : Optional plot title. Defaults to the feature name.
+    save_path             : If provided, save figure to this path instead of showing.
+    """
+    # Infer dtype from the first group that has data
+    sample_col = next(g[feature] for g in match_groups.values() if len(g) > 0)
+    col_dtype  = sample_col.dtype
+
+    is_categorical = (
+        col_dtype == bool
+        or col_dtype == object
+        or pd.api.types.is_integer_dtype(col_dtype)
+        and sample_col.nunique() <= categorical_max_unique
+    )
+
+    fig, ax = plt.subplots(figsize=(9, 5))
+
+    if is_categorical:
+        all_values = sorted(
+            set(v for g in match_groups.values() for v in g[feature].unique())
+        )
+        x     = np.arange(len(all_values))
+        width = 0.8 / len(match_groups)
+
+        for i, (label, group) in enumerate(match_groups.items()):
+            counts = (
+                group[feature]
+                .value_counts(normalize=True)
+                .reindex(all_values, fill_value=0)
+            )
+            ax.bar(
+                x + i * width,
+                counts.values,
+                width=width,
+                alpha=0.8,
+                color=colours.get(label, None),
+                label=f"{label}  (n={len(group):,})",
+            )
+
+        ax.set_xticks(x + width * (len(match_groups) - 1) / 2)
+        ax.set_xticklabels(all_values)
+        ax.set_ylabel("Fraction within category", fontsize=20, labelpad=15)
+
+    else:
+        minn = max(g[feature].quantile(per)       for g in match_groups.values())
+        maxx = min(g[feature].quantile(1 - per)   for g in match_groups.values())
+
+        for label, group in match_groups.items():
+            ax.hist(
+                group[feature],
+                bins=nbins,
+                range=(minn, maxx),
+                histtype="step",
+                linewidth=2,
+                alpha=0.8,
+                density=density,
+                color=colours.get(label, None),
+                label=f"{label}  (n={len(group):,})",
+            )
+    ax.set_ylabel("Normalised to unity" if density else "Counts", fontsize=20, labelpad=15)
+    ax.set_xlabel(feature, fontsize=20, labelpad=15)
+    ax.set_title(title or feature, fontsize=16)
+    ax.tick_params(axis="both", labelsize=15)
+    ax.legend(fontsize=13, loc="best", frameon=False)
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path)
+        plt.close()
+    else:
+        plt.show()
+
+
+def draw_all_features(
+    features: list,
+    match_groups: dict,
+    **kwargs,
+) -> None:
+    """
+    Convenience wrapper to call draw_feature() for a list of features.
+    Any keyword arguments are forwarded to draw_feature().
+    """
+    for feature in features:
+        draw_feature(feature, match_groups, **kwargs)
