@@ -3,16 +3,26 @@ import pandas as pd
 import numpy as np
 from hipe4ml.tree_handler import TreeHandler
 
-
 DESIGNED_FEATURES = [
     "mchID",
-    # Deltas
-    'DeltaX', 'DeltaY', 'DeltaPhi', 'DeltaTanl', 'SameSign', 'PT',
-    # Pulls
-    'PullX', 'PullY', 'PullPhi', 'PullTanl',
-    'DeltaDirection' # Angle mismatch between MCH and MFT tracks, calculated as the angle between their momentum vectors
+    
+    'DeltaX', 'DeltaY', 'DeltaPhi', 'DeltaTanl', 'DeltaR', 'SameSign', 
+    
+    'PullX', 'PullY', 'PullPhi', 'PullTanl', 'PullR',
+
+    'DeltaDirection',
+    
+    'PtMCH', 'PtMFT', 'DeltaPt', 'PullPt', 'RelPtDiff',
     ]
 
+NON_TRAINING_FEATURES = [
+    'mchID',
+    'TimeMCH', 'TimeResMCH', 'TimeMFT', 'TimeResMFT', 
+    'MftClusterSizesAndTrackFlags', 
+    'Chi2Glob', 'Chi2Match', # what's the diffference???
+    'McMaskMCH', 'McMaskMFT', 'McMaskGlob',
+    'MatchLabel', 'IsSignal'
+    ]
 
 def get_dataframe(file_path: str) -> pd.DataFrame:
     df = TreeHandler(file_path, "O2fwdmlcand", folder_name='DF_*').get_data_frame()
@@ -45,10 +55,13 @@ def design_features(df: pd.DataFrame) -> pd.DataFrame:
     df['DeltaTanl'] = tanlmch - tanlmft
 
     df['DeltaR'] = np.hypot(df['DeltaX'], df['DeltaY'])
-    df['RelPTDiff'] = (1/np.abs(invqptmch) - 1/np.abs(invqptmft))/(1/np.abs(invqptmch)+1/np.abs(invqptmft)) # relative curvature differene
+    df['RelPtDiff'] = (1/np.abs(invqptmch) - 1/np.abs(invqptmft))/(1/np.abs(invqptmch)+1/np.abs(invqptmft)) # relative curvature differene
 
     df['SameSign'] = (np.signbit(invqptmch) == np.signbit(invqptmft)).astype(np.int8)
-    df['PT'] = 1 / np.abs(invqptmch) # Rocking only with the MCH Pt for now - gives a consistent value for eventual binning procedure
+    df['PtMCH'] = 1 / np.abs(invqptmch) # Rocking only with the MCH Pt for now - gives a consistent value for eventual binning procedure
+    df['PtMFT'] = 1 / np.abs(invqptmft)
+    df['DeltaPt'] = df['PtMCH'] - df['PtMFT']
+    df['PullPt'] = df['DeltaPt'] / np.sqrt(df['C1Pt1PtMCH'] + df['C1Pt1PtMFT']) 
 
     mch_cols = ["XMCH", "YMCH", "PhiMCH", "TanlMCH", "InvQPtMCH"]
     df["mchID"] = df.round(6).groupby(mch_cols, sort=False).ngroup()
@@ -94,12 +107,12 @@ def inhousemetrics(df: pd.DataFrame, threshold: float = 0.5) -> tuple:
     idx = df.groupby("mchID")["score"].idxmax() # max score index in base df for each mchID group
     best = df.loc[idx].set_index("mchID") # best candidate for each mchID, indexed by mchID
     pairable = df.groupby("mchID")["IsSignal"].any() # Boolean series indicating if each mchID group has at least one true match - indexed by mchID
-
+    total = len(df.groupby("mchID").size())
     
 
     N_pairable = pairable.sum()
 
-    # N_non_pairable = 
+    N_non_pairable = total - N_pairable 
 
     N_gm_rec = (df.loc[idx, "score"] > threshold).sum()
 
@@ -113,14 +126,20 @@ def inhousemetrics(df: pd.DataFrame, threshold: float = 0.5) -> tuple:
         pairable
     ).sum()
 
+    N_rejected_non_pairable = (
+        (best["score"] <= threshold) &
+        (~pairable)
+    ).sum()
+
     N_gm_true_pairable = N_gm_true  # already pairable by construction ---kind of trivializes a bit
 
     pairing_purity = N_gm_true/N_gm_rec if N_gm_rec > 0 else 0
     pairing_efficiency = N_gm_rec_pairable/N_pairable if N_pairable > 0 else 0
     true_efficiency = N_gm_true_pairable/N_pairable if N_pairable > 0 else 0
     fake_efficiency = (N_gm_rec_pairable - N_gm_true_pairable)/N_pairable if N_pairable > 0 else 0
+    rejection_efficiency = N_rejected_non_pairable/N_non_pairable if N_non_pairable > 0 else 0
     # fake_efficiency_new_nomenclature = (N_gm_rec_pairable - N_gm_true_pairable)/(len(df.groupby("mchID").len())-N_pairable) if N_pairable > 0 else 0 # N_gm_rec - N_gm_rec_pairable = N_gm_nonpairable /
     # Pivot to standard new nomenclature
 
 
-    return pairing_purity, pairing_efficiency, true_efficiency, fake_efficiency
+    return pairing_purity, pairing_efficiency, true_efficiency, fake_efficiency, rejection_efficiency
