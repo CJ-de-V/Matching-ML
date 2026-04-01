@@ -150,11 +150,11 @@ def inhousemetrics(
 
     # --- Define metrics as (num, den) ---
     metrics = {
-        "purity": (N_gm_true, N_gm_rec),
-        "rec pairing efficiency": (N_gm_rec_pairable, N_pairable),
-        "true pairing efficiency": (N_gm_true, N_pairable),
-        "fake pairing efficiency": (N_gm_rec_pairable - N_gm_true, N_pairable),
-        "rejection efficiency": (N_rejected_non_pairable, N_non_pairable),
+        "Purity": (N_gm_true, N_gm_rec),
+        "Rec pairing efficiency": (N_gm_rec_pairable, N_pairable),
+        "True pairing efficiency": (N_gm_true, N_pairable),
+        "Wrong pairing efficiency": (N_gm_rec_pairable - N_gm_true, N_pairable),
+        "Rejection efficiency": (N_rejected_non_pairable, N_non_pairable),
     }
 
     rows = []
