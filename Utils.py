@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from hipe4ml.tree_handler import TreeHandler
-from typing import Optional
+from typing import Optional, Union
 
 DESIGNED_FEATURES = [
     "mchID",
@@ -90,12 +90,8 @@ def design_features(df: pd.DataFrame) -> pd.DataFrame:
     df['PullPhi'] = df['DeltaPhi'] / np.sqrt(df['CPhiPhiMCH'] + df['CPhiPhiMFT'])
     df['PullTanl'] = df['DeltaTanl'] / np.sqrt(df['CTglTglMCH'] + df['CTglTglMFT'])
 
-    df['DeltaDirection'] = np.arccos(
-        (np.cos(phimch) * np.cos(phimft) +
-         np.sin(phimch) * np.sin(phimft) +
-         +tanlmch * tanlmft) / 
-        (np.sqrt(1 + tanlmch**2) * np.sqrt(1 + tanlmft**2))
-    )
+    cos_delta = (np.cos(phimch) * np.cos(phimft) + np.sin(phimch) * np.sin(phimft) +tanlmch * tanlmft) / (np.sqrt(1 + tanlmch**2) * np.sqrt(1 + tanlmft**2))
+    df['DeltaDirection'] = np.arccos(np.clip(cos_delta, -1, 1)) # Clip for numerical stability
     return df
 
 
@@ -119,18 +115,24 @@ def perform_cuts(df: pd.DataFrame) -> pd.DataFrame:
 
     return df
 
-def inhousemetrics(df: pd.DataFrame, threshold: float = 0.5, metric: str = "score") -> tuple:
-    idx = df.groupby("mchID")[metric].idxmax() # max score index in base df for each mchID group
-    best = df.loc[idx].set_index("mchID") # best candidate for each mchID, indexed by mchID
-    pairable = df.groupby("mchID")["IsSignal"].any() # Boolean series indicating if each mchID group has at least one true match - indexed by mchID
-    total = len(df.groupby("mchID").size())
-    
+def inhousemetrics(
+    df: pd.DataFrame,
+    threshold: float = 0.5,
+    metric: str = "score",
+    Nsigma: float = 3.0,
+) -> pd.DataFrame:
+
+    idx = df.groupby("mchID")[metric].idxmax()
+    best = df.loc[idx].set_index("mchID")
+
+    pairable = df.groupby("mchID")["IsSignal"].any()
+    non_pairable = ~pairable
+    N_total = len(best)
 
     N_pairable = pairable.sum()
+    N_non_pairable = N_total - N_pairable
 
-    N_non_pairable = total - N_pairable 
-
-    N_gm_rec = (df.loc[idx, metric] > threshold).sum()
+    N_gm_rec = (best[metric] > threshold).sum()
 
     N_gm_true = (
         (best[metric] > threshold) &
@@ -142,24 +144,40 @@ def inhousemetrics(df: pd.DataFrame, threshold: float = 0.5, metric: str = "scor
         pairable
     ).sum()
 
-    N_rejected_non_pairable = (
-        (best[metric] <= threshold) &
-        (~pairable)
-    ).sum()
+    N_rejected_non_pairable = ((best[metric] <= threshold) &
+                               (non_pairable)).sum()
 
-    N_gm_true_pairable = N_gm_true  # already pairable by construction ---kind of trivializes a bit
 
-    pairing_purity = N_gm_true/N_gm_rec if N_gm_rec > 0 else 0
-    pairing_efficiency = N_gm_rec_pairable/N_pairable if N_pairable > 0 else 0
-    true_efficiency = N_gm_true_pairable/N_pairable if N_pairable > 0 else 0
-    fake_efficiency = (N_gm_rec_pairable - N_gm_true_pairable)/N_pairable if N_pairable > 0 else 0
-    rejection_efficiency = N_rejected_non_pairable/N_non_pairable if N_non_pairable > 0 else 0
+    # --- Define metrics as (num, den) ---
+    metrics = {
+        "purity": (N_gm_true, N_gm_rec),
+        "rec pairing efficiency": (N_gm_rec_pairable, N_pairable),
+        "true pairing efficiency": (N_gm_true, N_pairable),
+        "fake pairing efficiency": (N_gm_rec_pairable - N_gm_true, N_pairable),
+        "rejection efficiency": (N_rejected_non_pairable, N_non_pairable),
+    }
 
-    return pairing_purity, pairing_efficiency, true_efficiency, fake_efficiency, rejection_efficiency
+    rows = []
 
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
+    for name, (num, den) in metrics.items():
+
+        if den > 0:
+            val = num / den
+            err = Nsigma * np.sqrt(val * (1 - val) / den)
+        else:
+            val, err = np.nan, np.nan
+
+        rows.append({
+            "metric": name,
+            "value": val,
+            "uncertainty": err,
+            "num": num,
+            "den": den,
+        })
+
+    return pd.DataFrame(rows)
+
+
 
 def plot_metrics_vs_feature(
     df: pd.DataFrame,
@@ -167,91 +185,83 @@ def plot_metrics_vs_feature(
     threshold: float,
     metrics_fn,
     metric_col_prefix: str = "score",
-    n_bins: int = 10,
+    bins: Optional[Union[int, np.ndarray]] = 10,
     fmin: Optional[float] = None,
     fmax: Optional[float] = None,
+    trim_low: float = 0.0,
+    trim_high: float = 0.0,
+    Nsigma: float = 3.0,
 ):
-    """
-    Fixed-bin performance vs feature with simple binomial error bars.
-    """
 
-    # --- Define bins ---
-    # fmin, fmax = df[feature].min(), df[feature].max()
+    df = df.copy()
 
-    edges = np.linspace(fmin, fmax, n_bins + 1)
+    # --- Optional trimming ---
+    if trim_low > 0 or trim_high > 0:
+        low_q = df[feature].quantile(trim_low)
+        high_q = df[feature].quantile(1 - trim_high)
+        df = df[(df[feature] >= low_q) & (df[feature] <= high_q)]
 
-    results = []
+    # --- Range ---
+    if fmin is None:
+        fmin = df[feature].min()
+    if fmax is None:
+        fmax = df[feature].max()
 
-    for i in range(n_bins):
+    # --- Bin definition ---
+    if isinstance(bins, int):
+        edges = np.linspace(fmin, fmax, bins + 1)
+    else:
+        edges = np.asarray(bins)
+
+    all_results = []
+
+    for i in range(len(edges) - 1):
         low, high = edges[i], edges[i + 1]
 
-        if i == n_bins - 1:
+        if i == len(edges) - 2:
             df_bin = df[(df[feature] >= low) & (df[feature] <= high)]
         else:
             df_bin = df[(df[feature] >= low) & (df[feature] < high)]
 
-        N = len(df_bin)
-
-        if N == 0:
+        if len(df_bin) == 0:
             continue
 
-        metrics = metrics_fn(df_bin, threshold=threshold, metric=metric_col_prefix)
+        df_metrics = metrics_fn(
+            df_bin,
+            threshold=threshold,
+            metric=metric_col_prefix,
+            Nsigma=Nsigma,
+        )
 
-        # Convert to safe numpy array
-        metrics = np.array(metrics, dtype=float)
+        # --- attach bin info ---
+        df_metrics["bin_low"] = low
+        df_metrics["bin_high"] = high
+        df_metrics["bin_center"] = 0.5 * (low + high)
+        df_metrics["bin_width"] = 0.5 * (high - low)
+        df_metrics["entries"] = len(df_bin)
 
-        # --- crude binomial uncertainty ---
-        with np.errstate(invalid='ignore'):
-            errors = np.sqrt(metrics * (1 - metrics) / N)
+        all_results.append(df_metrics)
 
-        results.append({
-            "bin_low": low,
-            "bin_high": high,
-            "bin_center": 0.5 * (low + high),
-            "bin_width": 0.5 * (high - low),
-            "entries": N,
-            "pairing_purity": metrics[0],
-            "pairing_efficiency": metrics[1],
-            "true_efficiency": metrics[2],
-            "fake_efficiency": metrics[3],
-            "rejection_efficiency": metrics[4],
-            "err_pairing_purity": errors[0],
-            "err_pairing_efficiency": errors[1],
-            "err_true_efficiency": errors[2],
-            "err_fake_efficiency": errors[3],
-            "err_rejection_efficiency": errors[4],
-        })
-
-    result_df = pd.DataFrame(results)
+    result_df = pd.concat(all_results, ignore_index=True)
 
     # --- Plot ---
     plt.figure(figsize=(9, 6))
 
-    metrics_list = [
-        "pairing_purity",
-        "pairing_efficiency",
-        "true_efficiency",
-        "fake_efficiency",
-        "rejection_efficiency",
-    ]
+    for metric, subdf in result_df.groupby("metric"):
 
-    for col in metrics_list:
-        y = result_df[col]
-        yerr = result_df[f"err_{col}"]
-
-        # Skip if completely NaN (fixes your missing curve issue)
-        if y.isna().all():
-            print(f"[WARN] {col} is all NaN → skipped")
+        # Skip broken metrics
+        if subdf["value"].isna().all():
+            print(f"[WARN] {metric} is all NaN → skipped")
             continue
 
         plt.errorbar(
-            result_df["bin_center"],
-            y,
-            yerr=yerr,
-            xerr=result_df["bin_width"],
+            subdf["bin_center"],
+            subdf["value"],
+            yerr=subdf["uncertainty"],
+            xerr=subdf["bin_width"],
             fmt='o',
             capsize=3,
-            label=col,
+            label=metric,
         )
 
     plt.xlabel(feature)
@@ -293,7 +303,7 @@ def draw_feature(
     save_path: Optional[str] = None,
 ) -> None:
     """
-    Plot a normalised histogram (continuous) or grouped bar chart (categorical)
+    Plot a histogram, normalised or not, (continuous) or grouped bar chart (categorical)
     of `feature`, broken down by match label category.
 
     Parameters
