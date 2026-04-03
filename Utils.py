@@ -521,3 +521,75 @@ def draw_all_features(
     """
     for feature in features:
         draw_feature(feature, match_groups, **kwargs)
+
+
+def sweep_threshold_plot(
+    df_eval: pd.DataFrame,
+    metrics_fn,
+    score_col: str = "score",
+    n_steps: int = 100,
+    title: str = "Metrics vs Threshold",
+    Nsigma: float = 1.0,
+):
+    """
+    Sweep threshold and plot metrics using structured DataFrame output.
+    """
+
+    score_min = df_eval[score_col].min()
+    score_max = df_eval[score_col].max()
+    thresholds = np.linspace(score_min, score_max, n_steps)
+
+    all_results = []
+
+    for t in thresholds:
+        df_metrics = metrics_fn(
+            df_eval,
+            threshold=t,
+            metric=score_col,
+            Nsigma=Nsigma,
+        )
+
+        df_metrics["threshold"] = t
+        all_results.append(df_metrics)
+    print(f"Computed metrics are {all_results} thresholds.")
+
+    result_df = pd.concat(all_results, ignore_index=True)
+
+    # --- Plot ---
+    fig, ax = plt.subplots(figsize=(9, 5))
+
+    for metric, subdf in result_df.groupby("metric"):
+
+        if subdf["value"].isna().all():
+            print(f"[WARN] {metric} is all NaN → skipped")
+            continue
+
+        # Sort for clean lines
+        subdf = subdf.sort_values("threshold")
+
+        ax.plot(
+            subdf["threshold"],
+            subdf["value"],
+            lw=2,
+            label=metric,
+        )
+
+        # --- Optional uncertainty band ---
+        if "uncertainty" in subdf.columns:
+            ax.fill_between(
+                subdf["threshold"],
+                subdf["value"] - subdf["uncertainty"],
+                subdf["value"] + subdf["uncertainty"],
+                alpha=0.2,
+            )
+
+    ax.set_xlabel("Score threshold")
+    ax.set_ylabel("Metric value")
+    ax.set_title(title)
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    plt.show()
+
+    return result_df
