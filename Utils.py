@@ -52,7 +52,7 @@ def get_dataframe(file_path: str) -> pd.DataFrame:
         df[bool_cols] = df[bool_cols].astype(int)
     return df
 
-def process_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+def process_dataframe(df: pd.DataFrame, makedummies: bool) -> pd.DataFrame:
     # --- 1. Perform cuts ---
     df = perform_cuts(df)
 
@@ -60,8 +60,9 @@ def process_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     df = design_features(df)
 
     # --- 3. Add dummy candidates for non-pairable groups ---
-    df = add_dummy_candidates(df, FEATURES=[f for f in df.columns.tolist() if f not in NON_TRAINING_FEATURES], group_col="mchID", signal_col="IsSignal", matchlabel_col="MatchLabel", dummy_flag_col="is_dummy", k_std=3.0)
-
+    if makedummies:
+        df = add_dummy_candidates(df, FEATURES=[f for f in df.columns.tolist() if f not in NON_TRAINING_FEATURES], group_col="mchID", signal_col="IsSignal", matchlabel_col="MatchLabel", dummy_flag_col="is_dummy", k_std=3.0)
+    
     return df
 
 
@@ -76,6 +77,8 @@ def design_features(df: pd.DataFrame) -> pd.DataFrame:
     tanlmft = df['TanlMFT'].values
     invqptmch = df['InvQPtMCH'].values
     invqptmft = df['InvQPtMFT'].values
+
+    df["is_dummy"] = 0 # ensure the column exists even if we are not adding dummy candidates - will be 0 for all real candidates
 
     df['DeltaX'] = xmch - xmft
     df['DeltaY'] = ymch - ymft
@@ -106,7 +109,6 @@ def design_features(df: pd.DataFrame) -> pd.DataFrame:
 
     cos_delta = (np.cos(phimch) * np.cos(phimft) + np.sin(phimch) * np.sin(phimft) +tanlmch * tanlmft) / (np.sqrt(1 + tanlmch**2) * np.sqrt(1 + tanlmft**2))
     df['DeltaDirection'] = np.arccos(np.clip(cos_delta, -1, 1)) # Clip for numerical stability
-    # Dummy rows added here, necessitates deciding on features at this stage already
     return df
 
 def add_dummy_candidates(df, FEATURES, group_col="mchID",
@@ -143,16 +145,13 @@ def add_dummy_candidates(df, FEATURES, group_col="mchID",
     df = df.copy()
 
     # --- 1. Add dummy flag to original data
-    df[dummy_flag_col] = 0
+    df[dummy_flag_col] = 0 # already done in design_features to ensure the column exists before we add the dummy candidates - will be 0 for all real candidates and 1 for the dummy ones we add here
 
     # --- 2. Precompute "bad" feature values
     bad_feature_values = {}
     for feat in FEATURES:
-        max_val = df[feat].max()
-        std_val = df[feat].std()
-        if np.isnan(std_val):
-            std_val = 0.0
-        bad_feature_values[feat] = 0.0 #max_val + k_std * std_val
+        avgval = df[df["MatchLabel"].isin(MATCH_LABEL_GROUPS["Fake"])][feat].mean()
+        bad_feature_values[feat] = avgval #max_val + k_std * std_val
         # push dummy features beyond the max to ensure they are "bad" and easily distinguishable from real candidates
         #TODO: consider different bad feature generation - cannot have a single one for all of them - maybe something based on the group's values, or the underlying fake distribution?
     # --- 3. Build dummy rows
