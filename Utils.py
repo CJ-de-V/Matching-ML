@@ -437,7 +437,13 @@ def draw_feature(
     save_path             : If provided, save figure to this path instead of showing.
     """
     # Infer dtype from the first group that has data
-    sample_col = next(g[feature] for g in match_groups.values() if len(g) > 0)
+    non_empty_groups = [g for g in match_groups.values() if len(g) > 0]
+    
+    if not non_empty_groups:
+        # All groups are empty; skip this feature
+        return
+    
+    sample_col = non_empty_groups[0][feature]
     col_dtype  = sample_col.dtype
 
     is_categorical = (
@@ -483,7 +489,16 @@ def draw_feature(
         #         print(f"{label:15s}: {qmin:.3g} → {qmax:.3g}")
         minn = min(g[feature].quantile(per) for g in match_groups.values() if len(g) > 0)
         maxx = max(g[feature].quantile(1 - per) for g in match_groups.values() if len(g) > 0)
+        
+        # Avoid degenerate histogram range (minn == maxx) — expand slightly
+        if minn == maxx:
+            epsilon = 1e-6 if abs(minn) < 1 else abs(minn) * 1e-6
+            minn -= epsilon
+            maxx += epsilon
+        
         for label, group in match_groups.items():
+            if len(group) == 0:
+                continue  # Skip empty groups to avoid histogram warnings
             # if len(group) > 0:
             #     print(label, group[feature].quantile(per), group[feature].quantile(1 - per))
             ax.hist(
