@@ -6,22 +6,26 @@ from hipe4ml.tree_handler import TreeHandler
 from typing import Optional, Union
 
 DESIGNED_FEATURES = [
-    "mchID", "is_dummy", # for the dummy candidates
+    "mchID", "is_dummy", # Indexing and dummy flag
     
-    'DeltaX', 'DeltaY', 'DeltaPhi', 'DeltaTanl', 'DeltaR', 'SameSign', 
+    'DeltaX', 'DeltaY', 'DeltaPhi', 'DeltaTanl', 'DeltaR', # MFT-MCH feature residuals
     
-    'PullX', 'PullY', 'PullPhi', 'PullTanl', 'PullR',
+    'SameSign', # SignMch == SignMFT
+    
+    'PullX', 'PullY', 'PullPhi', 'PullTanl', 'PullR', # residuals / sqrt(Cfeaturefeature) from covariance matrix
 
-    'DeltaDirection',
+    'DeltaDirection', # angle between MCH and MFT track directions
     
-    'PtMCH', 'PtMFT', 'DeltaPt', 'PullPt', 'RelPtDiff',
+    'PtMCH', 'PtMFT', 'DeltaPt', 'PullPt', # Pt features
+    
+    'RelPtDiff', # Pt difference / sum of Pt magnitudes
     ]
 
 NON_TRAINING_FEATURES = [
     'mchID',
     'TimeMCH', 'TimeResMCH', 'TimeMFT', 'TimeResMFT', 
     'MftClusterSizesAndTrackFlags', 
-    'Chi2Glob', 'Chi2Match', # what's the diffference???
+    'Chi2Glob', 'Chi2Match',
     'McMaskMCH', 'McMaskMFT', 'McMaskGlob',
     'MatchLabel', 'IsSignal'
     ]
@@ -43,8 +47,8 @@ MATCH_COLOURS = {
 }
 
 
-def get_dataframe(file_path: str) -> pd.DataFrame:
-    df = TreeHandler(file_path, "O2fwdmlcand", folder_name='DF_*').get_data_frame()
+def get_dataframe(file_path: str, folder_name: str ) -> pd.DataFrame:
+    df = TreeHandler(file_path, "O2fwdmlcand", folder_name=folder_name).get_data_frame()
     df.columns = df.columns.str.replace(r'^f', '', regex=True) # Drop leading 'f'
     bool_cols = df.select_dtypes(include='bool').columns
     if len(bool_cols) > 0:
@@ -271,7 +275,7 @@ def inhousemetrics(
         "Purity": (N_gm_true, N_gm_rec),
         "Rec pairing efficiency": (N_gm_rec_pairable, N_pairable),
         "True pairing efficiency": (N_gm_true, N_pairable),
-        "Wrong pairing efficiency": (N_gm_rec_pairable - N_gm_true, N_pairable),
+        "Wrong pairing fraction": (N_gm_rec_pairable - N_gm_true, N_pairable),
         "Rejection efficiency": (N_rejected_non_pairable, N_non_pairable),
     }
 
