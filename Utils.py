@@ -72,47 +72,35 @@ def process_dataframe(df: pd.DataFrame, makedummies: bool) -> pd.DataFrame:
 
 
 def design_features(df: pd.DataFrame) -> pd.DataFrame:
-    xmch = df['XMCH'].values
-    xmft = df['XMFT'].values
-    ymch = df['YMCH'].values
-    ymft = df['YMFT'].values
-    phimch = df['PhiMCH'].values
-    phimft = df['PhiMFT'].values
-    tanlmch = df['TanlMCH'].values
-    tanlmft = df['TanlMFT'].values
-    invqptmch = df['InvQPtMCH'].values
-    invqptmft = df['InvQPtMFT'].values
-
     df["is_dummy"] = 0 # ensure the column exists even if we are not adding dummy candidates - will be 0 for all real candidates
 
-    df['DeltaX'] = xmch - xmft
-    df['DeltaY'] = ymch - ymft
+    df['DeltaX'] = df['XMCH'] - df['XMFT']
+    df['DeltaY'] = df['YMCH'] - df['YMFT']
 
-    dphi = phimch - phimft
+    dphi = df['PhiMCH'] - df['PhiMFT']
     df['DeltaPhi'] = np.arctan2(np.sin(dphi), np.cos(dphi))
 
-    df['DeltaTanl'] = tanlmch - tanlmft
+    df['DeltaTanl'] = df['TanlMCH'] - df['TanlMFT']
 
     df['DeltaR'] = np.hypot(df['DeltaX'], df['DeltaY'])
-    df['RelPtDiff'] = (1/np.abs(invqptmch) - 1/np.abs(invqptmft))/(1/np.abs(invqptmch)+1/np.abs(invqptmft)) # relative curvature differene
+    df['RelPtDiff'] = (1/np.abs(df['InvQPtMCH']) - 1/np.abs(df['InvQPtMFT'])) / (1/np.abs(df['InvQPtMCH']) + 1/np.abs(df['InvQPtMFT'])) # relative curvature difference
 
-    df['SameSign'] = (np.signbit(invqptmch) == np.signbit(invqptmft)).astype(np.int8)
-    df['PtMCH'] = 1 / np.abs(invqptmch) # Rocking only with the MCH Pt for now - gives a consistent value for eventual binning procedure
-    df['PtMFT'] = 1 / np.abs(invqptmft)
+    df['SameSign'] = (np.signbit(df['InvQPtMCH']) == np.signbit(df['InvQPtMFT'])).astype(np.int8)
+    df['PtMCH'] = 1 / np.abs(df['InvQPtMCH']) # Rocking only with the MCH Pt for now - gives a consistent value for eventual binning procedure
+    df['PtMFT'] = 1 / np.abs(df['InvQPtMFT'])
     df['DeltaPt'] = df['PtMCH'] - df['PtMFT']
     df['PullPt'] = df['DeltaPt'] / np.sqrt(df['C1Pt1PtMCH'] + df['C1Pt1PtMFT']) 
 
     mch_cols = ["XMCH", "YMCH", "PhiMCH", "TanlMCH", "InvQPtMCH"]
     df["mchID"] = df.round(6).groupby(mch_cols, sort=False).ngroup()
 
-    # check if it's a standard deviation or a variance in the denominator - we will assume it's a variance since that is more common for residual normalization
     df['PullX'] = df['DeltaX'] / np.sqrt(df['CXXMCH'] + df['CXXMFT'])
     df['PullY'] = df['DeltaY'] / np.sqrt(df['CYYMCH'] + df['CYYMFT'])
     df['PullR'] = df['DeltaR'] / np.sqrt(df['CXXMCH'] + df['CXXMFT'] + df['CYYMCH'] + df['CYYMFT'])
     df['PullPhi'] = df['DeltaPhi'] / np.sqrt(df['CPhiPhiMCH'] + df['CPhiPhiMFT'])
     df['PullTanl'] = df['DeltaTanl'] / np.sqrt(df['CTglTglMCH'] + df['CTglTglMFT'])
 
-    cos_delta = (np.cos(phimch) * np.cos(phimft) + np.sin(phimch) * np.sin(phimft) +tanlmch * tanlmft) / (np.sqrt(1 + tanlmch**2) * np.sqrt(1 + tanlmft**2))
+    cos_delta = (np.cos(df['PhiMCH']) * np.cos(df['PhiMFT']) + np.sin(df['PhiMCH']) * np.sin(df['PhiMFT']) + df['TanlMCH'] * df['TanlMFT']) / (np.sqrt(1 + df['TanlMCH']**2) * np.sqrt(1 + df['TanlMFT']**2))
     df['DeltaDirection'] = np.arccos(np.clip(cos_delta, -1, 1)) # Clip for numerical stability
     return df
 
