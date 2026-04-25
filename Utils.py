@@ -31,19 +31,19 @@ NON_TRAINING_FEATURES = [
     ]
 
 MATCH_LABEL_GROUPS = {
-    "Wrong match": [1, 5],
+    "Wrong": [1, 5],
     "Decay":       [2, 6],
-    "Fake":        [3, 7],
-    "True match":  [0, 4],
-    "Dummy match": [8], # for non-pairable groups
+    "Fake":        [3, 7, 8],
+    "True":  [0, 4],
+    "Dummy": [9], # for non-pairable groups TODO: return this to 8 once the particles with no associated mcparticle are no longer assigned 8
 }
 
 MATCH_COLOURS = {
-    "True match":  "steelblue",
-    "Wrong match": "tomato",
+    "True":  "steelblue",
+    "Wrong": "tomato",
     "Decay":       "mediumseagreen",
     "Fake":        "goldenrod",
-    "Dummy match": "gray",
+    "Dummy": "gray",
 }
 
 
@@ -58,7 +58,7 @@ def get_dataframe(file_path: str, folder_name: str ) -> pd.DataFrame:
 
 def process_dataframe(df: pd.DataFrame, makedummies: bool) -> pd.DataFrame:
     # --- 1. Perform cuts ---
-    df = perform_cuts(df)
+    df = perform_cuts(df) #temporarily suspended
 
     # --- 2. Design features ---
     df = design_features(df)
@@ -231,16 +231,18 @@ def inhousemetrics(
     metric: str = "score",
     Nsigma: float = 3.0,
 ) -> pd.DataFrame:
-
     idx = df.groupby("mchID")[metric].idxmax()
     best = df.loc[idx].set_index("mchID")
 
     pairable = (
+        df["MatchLabel"].isin(MATCH_LABEL_GROUPS["True"] + MATCH_LABEL_GROUPS["Wrong"])
+        & (df["is_dummy"] == 0)
+    ).groupby(df["mchID"]).any()    
+    FakeNMissing = ~(
         ((df["IsSignal"] == 1) & (df["is_dummy"] == 0))
         .groupby(df["mchID"])
         .any()
     )
-    non_pairable = ~pairable
     is_reconstructed = (best[metric] > threshold) & (best["is_dummy"] == 0)
     # --- true match correctly reconstructed ---
     is_true = best["IsSignal"] == 1 # a bit debatable since this includes the dummy candidates
@@ -249,13 +251,14 @@ def inhousemetrics(
 
     N_total = len(best)
     N_pairable = pairable.sum()
-    N_non_pairable = N_total - N_pairable
+    # N_non_pairable = N_total - N_pairable
+    N_FakeNMissing = FakeNMissing.sum()
     N_gm_rec = is_reconstructed.sum()
     N_gm_true = is_true_reconstructed.sum()
 
 
     N_gm_rec_pairable = (is_reconstructed & pairable).sum()
-    N_rejected_non_pairable = (is_rejected & non_pairable).sum()
+    N_rejected_FakeNMissing = (is_rejected & FakeNMissing).sum()
 
 
     # --- Define metrics as (num, den) ---
@@ -264,7 +267,7 @@ def inhousemetrics(
         "Rec pairing efficiency": (N_gm_rec_pairable, N_pairable),
         "True pairing efficiency": (N_gm_true, N_pairable),
         "Wrong pairing fraction": (N_gm_rec_pairable - N_gm_true, N_pairable),
-        "Rejection efficiency": (N_rejected_non_pairable, N_non_pairable),
+        "Rejection efficiency": (N_rejected_FakeNMissing, N_FakeNMissing),
     }
 
     rows = []
