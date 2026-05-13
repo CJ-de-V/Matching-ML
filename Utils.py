@@ -16,9 +16,9 @@ DESIGNED_FEATURES = [
 
     'DeltaDirection', # angle between MCH and MFT track directions
     
-    'PtMCH', 'PtMFT', 'DeltaPt', 'PullPt', # Pt features
-    
-    'RelPtDiff', # Pt difference / sum of Pt magnitudes
+    'PtMCH', 'PtMFT', 'DeltaPt', 'PullPt', 'RelPtDiff', # Pt difference / sum of Pt magnitudes
+
+    'etaMCH', 'etaMFT', 'DeltaEta', 
     ]
 
 NON_TRAINING_FEATURES = [
@@ -27,7 +27,7 @@ NON_TRAINING_FEATURES = [
     'MftClusterSizesAndTrackFlags', 
     'Chi2Glob', 'Chi2Match', # temporarily included in training and evaluation
     'McMaskMCH', 'McMaskMFT', 'McMaskGlob',
-    'MatchLabel', 'IsSignal'
+    'MatchLabel', 'IsSignal', 'is_dummy' # Added is_dummy as we are not currently using it and don't want it in the o2 without use
     ]
 
 GROUP_PRESERVING_FEATURES = [
@@ -78,6 +78,11 @@ def process_dataframe(df: pd.DataFrame, makedummies: bool) -> pd.DataFrame:
 
 
 def design_features(df: pd.DataFrame) -> pd.DataFrame:
+    
+    df['etaMCH'] = np.arcsinh(df['TanlMCH'])
+    df['etaMFT'] = np.arcsinh(df['TanlMFT'])
+    df['DeltaEta'] = df['etaMCH'] - df['etaMFT']
+
     df["is_dummy"] = 0 # ensure the column exists even if we are not adding dummy candidates - will be 0 for all real candidates
 
     df['DeltaX'] = df['XMCH'] - df['XMFT']
@@ -89,13 +94,13 @@ def design_features(df: pd.DataFrame) -> pd.DataFrame:
     df['DeltaTanl'] = df['TanlMCH'] - df['TanlMFT']
 
     df['DeltaR'] = np.hypot(df['DeltaX'], df['DeltaY'])
-    df['RelPtDiff'] = (1/np.abs(df['InvQPtMCH']) - 1/np.abs(df['InvQPtMFT'])) / (1/np.abs(df['InvQPtMCH']) + 1/np.abs(df['InvQPtMFT'])) # relative curvature difference
 
     df['SameSign'] = (np.signbit(df['InvQPtMCH']) == np.signbit(df['InvQPtMFT'])).astype(np.int8)
     df['PtMCH'] = 1 / np.abs(df['InvQPtMCH']) # Rocking only with the MCH Pt for now - gives a consistent value for eventual binning procedure
     df['PtMFT'] = 1 / np.abs(df['InvQPtMFT'])
     df['DeltaPt'] = df['PtMCH'] - df['PtMFT']
-    df['PullPt'] = df['DeltaPt'] / np.sqrt(df['C1Pt1PtMCH'] + df['C1Pt1PtMFT']) 
+    df['RelPtDiff'] = (df['DeltaPt']) / (df['PtMFT'] + df['PtMCH']) # relative curvature difference
+    df['PullPt'] = df['DeltaPt'] / np.sqrt(df['C1Pt1PtMCH']/df['InvQPtMCH']**4 + df['C1Pt1PtMFT']/df['InvQPtMFT']**4) # error stored is 1/pt's TODO: Fix to properly use uncertainties on Pt instead of 1/Pt
 
     mch_cols = ["XMCH", "YMCH", "PhiMCH", "TanlMCH", "InvQPtMCH"]
     df["mchID"] = df.round(6).groupby(mch_cols, sort=False).ngroup()
@@ -466,7 +471,7 @@ def draw_feature(
         for i, (label, group) in enumerate(match_groups.items()):
             counts = (
                 group[feature]
-                .value_counts(normalize=True)
+                .value_counts(normalize=density) # Added density instead of defaulting to True for some reason - now have count based barplots
                 .reindex(all_values, fill_value=0)
             )
             ax.bar(
