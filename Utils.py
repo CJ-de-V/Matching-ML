@@ -5,6 +5,8 @@ import matplotlib.pyplot as plt
 from hipe4ml.tree_handler import TreeHandler
 from typing import Optional, Union
 
+
+#TODO: Consider adding absolute value features for the symmetric(ish) pulls/deltas
 DESIGNED_FEATURES = [
     "mchID", "is_dummy", # Indexing and dummy flag
     
@@ -19,6 +21,9 @@ DESIGNED_FEATURES = [
     'PtMCH', 'PtMFT', 'DeltaPt', 'PullPt', 'RelPtDiff', # Pt difference / sum of Pt magnitudes
 
     'etaMCH', 'etaMFT', 'DeltaEta', 
+
+    'ADeltaX', 'ADeltaY', 'ADeltaPhi', # Absolute value of the deltas - maybe not useful but could be for the model to have access to the magnitude of the disagreement regardless of direction
+    'APullX', 'APullY', 'APullPhi',# Absolute value of the pulls - maybe not useful but could be for the model to have access to the magnitude of the disagreement regardless of direction
     ]
 
 NON_TRAINING_FEATURES = [
@@ -30,6 +35,8 @@ NON_TRAINING_FEATURES = [
     'MatchLabel', 'IsSignal', 'is_dummy' # Added is_dummy as we are not currently using it and don't want it in the o2 without use
     ]
 
+
+#TODO: use this instead of the mch features to assign groups, do metric plotting as a function of these for evluation
 GROUP_PRESERVING_FEATURES = [
     'XMCH', 'YMCH', 'PhiMCH', 'TanlMCH', 'InvQPtMCH', "chi2MCH",
     'Chi2MCH', 'PDCA', 'Rabs', 'CXXMCH', 'CYYMCH', 'CPhiPhiMCH', 'CTglTglMCH', 'C1Pt1PtMCH'
@@ -51,6 +58,30 @@ MATCH_COLOURS = {
     "Dummy": "gray",
 }
 
+# Currently selected features for the OO model --- incomplete as of yet
+FEATURES_OO = [
+       'RelPtDiff' ,
+       'PtMFT',  
+       'DeltaPt',  
+       'DeltaDirection',  
+       'SameSign',  
+       'DCAY',  
+       'DCAX',  
+       'InvQPtMFT',  
+        'Rabs',  
+      'CTglTglMCH',  
+     'CPhiPhiMCH',  
+           'PDCA',  
+      'DeltaTanl',  
+          'DeltaR',  
+        'DeltaEta',  
+      'C1Pt1PtMCH',  
+        'DeltaPhi',  
+         'TanlMFT',  
+          'etaMFT',  
+          'etaMCH',  
+          'TanlMCH' 
+]
 
 
 def get_dataframe(file_path: str, folder_name: str ) -> pd.DataFrame:
@@ -87,9 +118,11 @@ def design_features(df: pd.DataFrame) -> pd.DataFrame:
 
     df['DeltaX'] = df['XMCH'] - df['XMFT']
     df['DeltaY'] = df['YMCH'] - df['YMFT']
-
     dphi = df['PhiMCH'] - df['PhiMFT']
     df['DeltaPhi'] = np.arctan2(np.sin(dphi), np.cos(dphi))
+    df['ADeltaPhi'] = np.abs(df['DeltaPhi'])
+    df['ADeltaX'] = np.abs(df['DeltaX'])
+    df['ADeltaY'] = np.abs(df['DeltaY'])
 
     df['DeltaTanl'] = df['TanlMCH'] - df['TanlMFT']
 
@@ -110,6 +143,11 @@ def design_features(df: pd.DataFrame) -> pd.DataFrame:
     df['PullR'] = df['DeltaR'] / np.sqrt(df['CXXMCH'] + df['CXXMFT'] + df['CYYMCH'] + df['CYYMFT'])
     df['PullPhi'] = df['DeltaPhi'] / np.sqrt(df['CPhiPhiMCH'] + df['CPhiPhiMFT'])
     df['PullTanl'] = df['DeltaTanl'] / np.sqrt(df['CTglTglMCH'] + df['CTglTglMFT'])
+    df['APullX'] = np.abs(df['PullX'])
+    df['APullY'] = np.abs(df['PullY'])
+    df['APullPhi'] = np.abs(df['PullPhi'])
+
+
 
     cos_delta = (np.cos(df['PhiMCH']) * np.cos(df['PhiMFT']) + np.sin(df['PhiMCH']) * np.sin(df['PhiMFT']) + df['TanlMCH'] * df['TanlMFT']) / (np.sqrt(1 + df['TanlMCH']**2) * np.sqrt(1 + df['TanlMFT']**2))
     df['DeltaDirection'] = np.arccos(np.clip(cos_delta, -1, 1)) # Clip for numerical stability
@@ -212,7 +250,7 @@ def perform_cuts(df: pd.DataFrame) -> pd.DataFrame:
     
     # Do the exact same as above but for the PDCA
 
-    # wrap mft phi to [-pi, pi]
+    # wrap mft phi to [-pi, pi] --- right way to go about it, the outside of -pi->pi values are for the MFT tracks that take a helical path
     df['PhiMFT'] = np.arctan2(np.sin(df['PhiMFT']), np.cos(df['PhiMFT']))
 
     return df
