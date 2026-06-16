@@ -83,6 +83,8 @@ FEATURES_OO = [
           'TanlMCH' 
 ]
 
+FEATURES_PBPB = []
+
 
 def get_dataframe(file_path: str, folder_name: str ) -> pd.DataFrame:
     df = TreeHandler(file_path, "O2fwdmlcand", folder_name=folder_name).get_data_frame()
@@ -233,22 +235,40 @@ def add_dummy_candidates(df, FEATURES, group_col="mchID",
 
     return df_out
 
-
-
 def perform_cuts(df: pd.DataFrame) -> pd.DataFrame:
 
-    eta_mch = np.arcsinh(pd.to_numeric(df["TanlMCH"], errors="coerce"))
-    eta_mask = (eta_mch > -3.6) & (eta_mch < -2.45)
-
+    # Eta cuts TODO: confirm we do not pick up any illegal eta entries
+    eta_mch = np.arcsinh(pd.to_numeric(df["TanlMCH"], errors="raise"))
+    eta_mft = np.arcsinh(pd.to_numeric(df["TanlMFT"], errors = "raise"))
+    # Previously -2.45., adapted to reflect datamaker's limits for both MCH and MFT tracks
+    eta_mask = (eta_mch > -3.6) & (eta_mch < -2.5) & (eta_mft > -3.6) & (eta_mft < -2.5)
     removed = df[~eta_mask].copy()
     r_rows = int(removed.shape[0])
-    r_sig  = int(pd.to_numeric(removed.get("IsSignal", 0), errors="coerce").sum())
+    r_sig  = int(pd.to_numeric(removed.get("IsSignal", 0), errors="raise").sum())
     r_bkg  = r_rows - r_sig
-    print("[Eta window] -3.6 < eta_MCH < -2.45")
+    print("[Eta window] -4.0 < eta_MCH < -2.5 AND -3.6 < eta_MFT < -2.5")
     print(f"Removed rows: {r_rows}  signal={r_sig}  background={r_bkg}")
     df = df[eta_mask].reset_index(drop=True)
     
-    # Do the exact same as above but for the PDCA
+    # TODO: Repeat for other garbage values spotted
+
+    # Drop garbage MFT entries TODO
+    mft_mask = (df['Chi2MFT'] < 1000)
+    removed = df[~mft_mask].copy()
+    r_rows = int(removed.shape[0])
+    r_sig  = int(pd.to_numeric(removed.get("IsSignal", 0), errors="coerce").sum())
+    r_bkg  = r_rows - r_sig
+    print(f"Removed rows with above 1000 MFT chi2: {r_rows}  signal={r_sig}  background={r_bkg}")
+    df = df[mft_mask].reset_index(drop=True)
+
+    # drop rows with negative MFT variances (GARBAGE) TODO: Confirm with Andrea how we should approach this?
+    var_mask = (df['CXXMFT'] > 0) & (df['CYYMFT'] > 0) & (df['CPhiPhiMFT'] > 0) & (df['CTglTglMFT'] > 0) & (df['C1Pt1PtMFT'] > 0)
+    removed = df[~var_mask].copy()
+    r_rows = int(removed.shape[0])
+    r_sig  = int(pd.to_numeric(removed.get("IsSignal", 0), errors="coerce").sum())
+    r_bkg  = r_rows - r_sig
+    print(f"Removed rows with non-positive MFT variances: {r_rows}  signal={r_sig}  background={r_bkg}")
+    df = df[var_mask].reset_index(drop=True)
 
     # wrap mft phi to [-pi, pi] --- right way to go about it, the outside of -pi->pi values are for the MFT tracks that take a helical path
     df['PhiMFT'] = np.arctan2(np.sin(df['PhiMFT']), np.cos(df['PhiMFT']))
