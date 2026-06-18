@@ -6,7 +6,7 @@ from hipe4ml.tree_handler import TreeHandler
 from typing import Optional, Union
 
 
-#TODO: Consider adding absolute value features for the symmetric(ish) pulls/deltas
+#TODO: Consider adding absolute value features for the symmetric(ish) pulls/deltas, add DCA_XY ALSO add some metric of total uncertainty... like something derived of the whole covariance matrix
 DESIGNED_FEATURES = [
     "mchID", "is_dummy", # Indexing and dummy flag
     
@@ -23,6 +23,7 @@ DESIGNED_FEATURES = [
     'etaMCH', 'etaMFT', 'DeltaEta', 
 
     'ADeltaX', 'ADeltaY', 'ADeltaPhi', # Absolute value of the deltas - maybe not useful but could be for the model to have access to the magnitude of the disagreement regardless of direction
+    
     'APullX', 'APullY', 'APullPhi',# Absolute value of the pulls - maybe not useful but could be for the model to have access to the magnitude of the disagreement regardless of direction
     ]
 
@@ -35,6 +36,12 @@ NON_TRAINING_FEATURES = [
     'MatchLabel', 'IsSignal', 'is_dummy' # Added is_dummy as we are not currently using it and don't want it in the o2 without use
     ]
 
+# TODO: ensure these features are not read in training to save on space
+SKIPPED_FEATURES  = [
+    'TimeMCH', 'TimeResMCH', 'TimeMFT', 'TimeResMFT', 
+    'MftClusterSizesAndTrackFlags', 
+    'Chi2Glob', 'Chi2Match', # temporarily included in training and evaluation
+    ]
 
 #TODO: use this instead of the mch features to assign groups, do metric plotting as a function of these for evluation
 GROUP_PRESERVING_FEATURES = [
@@ -43,23 +50,32 @@ GROUP_PRESERVING_FEATURES = [
 ]
 
 MATCH_LABEL_GROUPS = {
-    "Wrong": [1, 5],
-    "Decay":       [2, 6],
-    "Fake":        [3, 7, 8],
     "True":  [0, 4],
-    "Dummy": [9], # for non-pairable groups TODO: return this to 8 once the particles with no associated mcparticle are no longer assigned 8
+    "Wrong": [1, 5],
+    "Decay": [2, 6],
+    "Fake":  [3, 7],
+    "Unknown": [8], 
 }
 
 MATCH_COLOURS = {
-    "True":  "steelblue",
-    "Wrong": "tomato",
-    "Decay":       "mediumseagreen",
-    "Fake":        "goldenrod",
-    "Dummy": "gray",
+    "True":  "black",
+    "Wrong": "red",
+    "Decay": "lime",
+    "Fake":  "mediumblue",
+    "Unknown": "gray",
 }
 
+def subsample(df: pd.DataFrame, frac: float = 0.5) -> pd.DataFrame:
+    """Downsample the df while preserving group structure"""
+    unique_ids = df["mchID"].unique()
+    n_sample = int(frac * len(unique_ids))
+    sampled_ids = np.random.choice(unique_ids, n_sample, replace=False)
+    df = df[df["mchID"].isin(sampled_ids)]
+    return df
+
+
 # Currently selected features for the OO model --- incomplete as of yet
-FEATURES_OO_Uncorrelated_ = ['XMCH',
+FEATURES_OO_UNCORRELATED = ['XMCH',
  'YMCH',
  'PhiMCH',
  'Rabs',
@@ -112,7 +128,61 @@ FEATURES_OO_Uncorrelated_ = ['XMCH',
  'APullPhi',
  'DeltaDirection']
 
-FEATURES_PBPB = []
+FEATURES_PBPB_UNCORRELATED = ['XMCH',
+ 'YMCH',
+ 'PhiMCH',
+ 'etaMCH',
+ 'InvQPtMCH',
+ 'Chi2MCH',
+ 'PDCA',
+ 'Rabs',
+ 'CYYMCH',
+ 'CPhiPhiMCH',
+ 'CTglTglMCH',
+ 'CXYMCH',
+ 'CTglXMCH',
+ 'CTglYMCH',
+ 'CTglPhiMCH',
+ 'C1PtXMCH',
+ 'C1PtYMCH',
+ 'C1PtPhiMCH',
+ 'C1PtTglMCH',
+ 'XMFT',
+ 'YMFT',
+ 'DeltaTanl',
+ 'InvQPtMFT',
+ 'Chi2MFT',
+ 'TrackTypeMFT',
+ 'CPhiPhiMFT',
+ 'C1Pt1PtMFT',
+ 'C1PtYMFT',
+ 'DCAX',
+ 'DCAY',
+ 'IsAmbig',
+ 'MFTMult',
+ 'etaMFT',
+ 'DeltaEta',
+ 'DeltaX',
+ 'DeltaY',
+ 'DeltaPhi',
+ 'ADeltaPhi',
+ 'ADeltaX',
+ 'ADeltaY',
+ 'DeltaR',
+ 'SameSign',
+ 'PtMCH',
+ 'PtMFT',
+ 'RelPtDiff',
+ 'PullPt',
+ 'PullX',
+ 'PullY',
+ 'PullR',
+ 'PullPhi',
+ 'PullTanl',
+ 'APullX',
+ 'APullY',
+ 'APullPhi',
+ 'DeltaDirection']
 
 
 def get_dataframe(file_path: str, folder_name: str ) -> pd.DataFrame:
@@ -267,28 +337,28 @@ def add_dummy_candidates(df, FEATURES, group_col="mchID",
 def perform_cuts(df: pd.DataFrame) -> pd.DataFrame:
 
     # Eta cuts TODO: confirm we do not pick up any illegal eta entries
-    eta_mch = np.arcsinh(pd.to_numeric(df["TanlMCH"], errors="raise"))
-    eta_mft = np.arcsinh(pd.to_numeric(df["TanlMFT"], errors = "raise"))
-    # Previously -2.45., adapted to reflect datamaker's limits for both MCH and MFT tracks
-    eta_mask = (eta_mch > -3.6) & (eta_mch < -2.5) & (eta_mft > -3.6) & (eta_mft < -2.5)
-    removed = df[~eta_mask].copy()
-    r_rows = int(removed.shape[0])
-    r_sig  = int(pd.to_numeric(removed.get("IsSignal", 0), errors="raise").sum())
-    r_bkg  = r_rows - r_sig
-    print("[Eta window] -4.0 < eta_MCH < -2.5 AND -3.6 < eta_MFT < -2.5")
-    print(f"Removed rows: {r_rows}  signal={r_sig}  background={r_bkg}")
-    df = df[eta_mask].reset_index(drop=True)
+    # eta_mch = np.arcsinh(pd.to_numeric(df["TanlMCH"], errors="raise"))
+    # eta_mft = np.arcsinh(pd.to_numeric(df["TanlMFT"], errors = "raise"))
+    # # Previously -2.45., adapted to reflect datamaker's limits for both MCH and MFT tracks
+    # eta_mask = (eta_mch > -3.6) & (eta_mch < -2.5) & (eta_mft > -3.6) & (eta_mft < -2.5)
+    # removed = df[~eta_mask].copy()
+    # r_rows = int(removed.shape[0])
+    # r_sig  = int(pd.to_numeric(removed.get("IsSignal", 0), errors="raise").sum())
+    # r_bkg  = r_rows - r_sig
+    # print("[Eta window] -4.0 < eta_MCH < -2.5 AND -3.6 < eta_MFT < -2.5")
+    # print(f"Removed rows: {r_rows}  signal={r_sig}  background={r_bkg}")
+    # df = df[eta_mask].reset_index(drop=True)
     
     # TODO: Repeat for other garbage values spotted
 
     # Drop garbage MFT entries TODO
-    mft_mask = (df['Chi2MFT'] < 1000)
-    removed = df[~mft_mask].copy()
-    r_rows = int(removed.shape[0])
-    r_sig  = int(pd.to_numeric(removed.get("IsSignal", 0), errors="coerce").sum())
-    r_bkg  = r_rows - r_sig
-    print(f"Removed rows with above 1000 MFT chi2: {r_rows}  signal={r_sig}  background={r_bkg}")
-    df = df[mft_mask].reset_index(drop=True)
+    # mft_mask = (df['Chi2MFT'] < 1000)
+    # removed = df[~mft_mask].copy()
+    # r_rows = int(removed.shape[0])
+    # r_sig  = int(pd.to_numeric(removed.get("IsSignal", 0), errors="coerce").sum())
+    # r_bkg  = r_rows - r_sig
+    # print(f"Removed rows with above 1000 MFT chi2: {r_rows}  signal={r_sig}  background={r_bkg}")
+    # df = df[mft_mask].reset_index(drop=True)
 
     # drop rows with negative MFT variances (GARBAGE) TODO: Confirm with Andrea how we should approach this?
     var_mask = (df['CXXMFT'] > 0) & (df['CYYMFT'] > 0) & (df['CPhiPhiMFT'] > 0) & (df['CTglTglMFT'] > 0) & (df['C1Pt1PtMFT'] > 0)
