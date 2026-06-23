@@ -3,6 +3,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import Utils
 from sklearn.calibration import calibration_curve
+from sklearn.model_selection import GroupShuffleSplit
 
 
 def PeekData (df : pd.DataFrame) -> None:
@@ -42,14 +43,27 @@ def MakeCategories(df :pd.DataFrame) -> pd.DataFrame:
     print('\nLabel mapping: 0=True, 1=Wrong, 2=Decay, 3=Fake')
     return df
 
-def Splitter(df : pd.DataFrame, categorical : bool, train : float, val: float, test : float):
+def Splitter(df : pd.DataFrame, val_frac : float, test_frac : float):
     """Provides the splitting of DFs into group preserved df's for Train, Validation, and Test Respectively.
     Performs this for both categorical and binary approaches"""
-    leftover = 1-train
-    valsubfrac = val/leftover   
-    testsubfrac = test/leftover
-    if( categorical):
-        #usual splitting here
-        return
-    #binary approach stuffs here
-    return 'home'
+
+
+    valsubfrac = val_frac/(1-test_frac)       
+    groups = df["mchID"].values
+
+    test_splitter = GroupShuffleSplit(n_splits=1, test_size=test_frac, random_state=42)
+    temp_idx, test_idx = next(test_splitter.split(df, groups=groups))
+
+    df_temp = df.iloc[temp_idx]
+    df_test = df.iloc[test_idx]
+
+    temp_groups = df_temp["mchID"].values
+    val_splitter = GroupShuffleSplit(n_splits=1, test_size=valsubfrac, random_state=42)
+    train_idx, val_idx = next(val_splitter.split(df_temp, groups=temp_groups))
+
+    df_train = df_temp.iloc[train_idx]
+    df_val = df_temp.iloc[val_idx]
+
+    return df_train, df_val, df_test
+
+

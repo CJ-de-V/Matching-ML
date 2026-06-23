@@ -14,6 +14,8 @@ DESIGNED_FEATURES = [
     
     'SameSign', # SignMch == SignMFT
     
+    'DCAXY'
+    
     'PullX', 'PullY', 'PullPhi', 'PullTanl', 'PullR', # residuals / sqrt(Cfeaturefeature) from covariance matrix
 
     'DeltaDirection', # angle between MCH and MFT track directions
@@ -214,6 +216,8 @@ def design_features(df: pd.DataFrame) -> pd.DataFrame:
     df['etaMCH'] = np.arcsinh(df['TanlMCH'])
     df['etaMFT'] = np.arcsinh(df['TanlMFT'])
     df['DeltaEta'] = df['etaMCH'] - df['etaMFT']
+
+    df['DCAXY'] = np.sqrt(df['DCAX']**2+ df['DCAY']**2)
 
     df["is_dummy"] = 0 # ensure the column exists even if we are not adding dummy candidates - will be 0 for all real candidates
 
