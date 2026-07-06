@@ -67,3 +67,16 @@ def Splitter(df : pd.DataFrame, val_frac : float, test_frac : float):
     return df_train, df_val, df_test
 
 
+def splitter_internal( df:pd.DataFrame, test_frac:float):
+    """internally used splitter, also useful for when we have separate train and test datasets
+    i.e. weighted input ones"""
+          
+    groups = df["mchID"].values
+
+    test_splitter = GroupShuffleSplit(n_splits=1, test_size=test_frac, random_state=42)
+    temp_idx, test_idx = next(test_splitter.split(df, groups=groups))
+
+    df_temp = df.iloc[temp_idx]
+    df_test = df.iloc[test_idx]
+
+    return df_temp, df_test

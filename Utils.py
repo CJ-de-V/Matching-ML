@@ -14,7 +14,7 @@ DESIGNED_FEATURES = [
     
     'SameSign', # SignMch == SignMFT
     
-    'DCAXY'
+    'DCAXY', 'RMFT'
     
     'PullX', 'PullY', 'PullPhi', 'PullTanl', 'PullR', # residuals / sqrt(Cfeaturefeature) from covariance matrix
 
@@ -35,7 +35,11 @@ NON_TRAINING_FEATURES = [
     'MftClusterSizesAndTrackFlags', 
     'Chi2Glob', 'Chi2Match', # temporarily included in training and evaluation
     'McMaskMCH', 'McMaskMFT', 'McMaskGlob',
-    'MatchLabel', 'IsSignal', 'is_dummy' # Added is_dummy as we are not currently using it and don't want it in the o2 without use
+    'MatchLabel', 'IsSignal', 'is_dummy', # Added is_dummy as we are not currently using it and don't want it in the o2 without use
+
+    # features we exclude based on bias & selection cuts, i.e. we do not want our model to discriminate based on these, since it learns what we tell it to, not what we intend for it to
+    # Otherwise we risk it learning for example that non-prompts are bad
+    'DCAX', 'DCAY', 'PDCA', 'DCAXY', 'Rabs', 'IsAmbig', 'Chi2MCH', 'Chi2MFT', 'MFTMult'
     ]
 
 # TODO: ensure these features are not read in training to save on space
@@ -76,16 +80,15 @@ def subsample(df: pd.DataFrame, frac: float = 0.5) -> pd.DataFrame:
     return df
 
 
-# Currently selected features for the OO model --- incomplete as of yet
-FEATURES_OO_UNCORRELATED = ['XMCH',
+# Currently selected features for the OO model no \rho>0.9 features included
+FEATURES_OO_UNCORRELATED = [
+ 'XMCH',
  'YMCH',
  'PhiMCH',
- 'Rabs',
+ 'etaMCH',
  'InvQPtMCH',
- 'Chi2MCH',
- 'PDCA',
- 'CYYMCH',
- 'C1Pt1PtMCH',
+ 'CXXMCH',
+ 'CPhiPhiMCH',
  'CTglTglMCH',
  'CXYMCH',
  'CTglXMCH',
@@ -97,16 +100,22 @@ FEATURES_OO_UNCORRELATED = ['XMCH',
  'C1PtTglMCH',
  'XMFT',
  'YMFT',
- 'etaMFT',
+ 'DeltaTanl',
  'InvQPtMFT',
- 'Chi2MFT',
  'TrackTypeMFT',
+ 'CXXMFT',
+ 'CYYMFT',
  'CPhiPhiMFT',
  'CTglTglMFT',
- 'DCAX',
- 'DCAY',
- 'IsAmbig',
- 'MFTMult',
+ 'C1Pt1PtMFT',
+ 'CTglXMFT',
+ 'CTglYMFT',
+ 'CTglPhiMFT',
+ 'C1PtXMFT',
+ 'C1PtYMFT',
+ 'C1PtPhiMFT',
+ 'C1PtTglMFT',
+ 'etaMFT',
  'DeltaEta',
  'DeltaX',
  'DeltaY',
@@ -232,6 +241,7 @@ def design_features(df: pd.DataFrame) -> pd.DataFrame:
     df['DeltaTanl'] = df['TanlMCH'] - df['TanlMFT']
 
     df['DeltaR'] = np.hypot(df['DeltaX'], df['DeltaY'])
+    df['RMFT'] = np.hypot(df['XMFT'], df['YMFT'])
 
     df['SameSign'] = (np.signbit(df['InvQPtMCH']) == np.signbit(df['InvQPtMFT'])).astype(np.int8)
     df['PtMCH'] = 1 / np.abs(df['InvQPtMCH']) # Rocking only with the MCH Pt for now - gives a consistent value for eventual binning procedure
@@ -367,6 +377,7 @@ def perform_cuts(df: pd.DataFrame) -> pd.DataFrame:
     # drop rows with negative MFT variances (GARBAGE) TODO: Confirm with Andrea how we should approach this?
     var_mask = (df['CXXMFT'] > 0) & (df['CYYMFT'] > 0) & (df['CPhiPhiMFT'] > 0) & (df['CTglTglMFT'] > 0) & (df['C1Pt1PtMFT'] > 0)
     removed = df[~var_mask].copy()
+    print(removed) # temporary addition to invetigate the negative variances
     r_rows = int(removed.shape[0])
     r_sig  = int(pd.to_numeric(removed.get("IsSignal", 0), errors="coerce").sum())
     r_bkg  = r_rows - r_sig
@@ -679,7 +690,7 @@ def draw_feature(
                 color=colours.get(label, None),
                 label=f"{label}  (n={len(group):,})",
             )
-    ax.set_ylabel("Normalised to unity" if density else "Counts", fontsize=20, labelpad=15)
+    ax.set_ylabel("Density" if density else "Counts", fontsize=20, labelpad=15)
     ax.set_xlabel(feature, fontsize=20, labelpad=15)
     ax.set_title(title or feature, fontsize=16)
     ax.tick_params(axis="both", labelsize=15)
