@@ -35,7 +35,8 @@ NON_TRAINING_FEATURES = [
     'MftClusterSizesAndTrackFlags', 
     'Chi2Glob', 'Chi2Match', # temporarily included in training and evaluation
     'McMaskMCH', 'McMaskMFT', 'McMaskGlob',
-    'MatchLabel', 'IsSignal', 'is_dummy', # Added is_dummy as we are not currently using it and don't want it in the o2 without use
+    'MatchLabel', 'IsSignal',
+    #, 'is_dummy', # Added is_dummy as we are not currently using it and don't want it in the o2 without use
 
     # features we exclude based on bias & selection cuts, i.e. we do not want our model to discriminate based on these, since it learns what we tell it to, not what we intend for it to
     # Otherwise we risk it learning for example that non-prompts are bad
@@ -47,6 +48,7 @@ SKIPPED_FEATURES  = [
     'TimeMCH', 'TimeResMCH', 'TimeMFT', 'TimeResMFT', 
     'MftClusterSizesAndTrackFlags', 
     'Chi2Glob', 'Chi2Match', # temporarily included in training and evaluation
+    'McMaskMCH', 'McMaskMFT', 'McMaskGlob',
     ]
 
 #TODO: use this instead of the mch features to assign groups, do metric plotting as a function of these for evluation
@@ -80,122 +82,6 @@ def subsample(df: pd.DataFrame, frac: float = 0.5) -> pd.DataFrame:
     return df
 
 
-# Currently selected features for the OO model no \rho>0.9 features included
-FEATURES_OO_UNCORRELATED = [
- 'XMCH',
- 'YMCH',
- 'PhiMCH',
- 'etaMCH',
- 'InvQPtMCH',
- 'CXXMCH',
- 'CPhiPhiMCH',
- 'CTglTglMCH',
- 'CXYMCH',
- 'CTglXMCH',
- 'CPhiXMCH',
- 'CTglPhiMCH',
- 'C1PtXMCH',
- 'C1PtYMCH',
- 'C1PtPhiMCH',
- 'C1PtTglMCH',
- 'XMFT',
- 'YMFT',
- 'DeltaTanl',
- 'InvQPtMFT',
- 'TrackTypeMFT',
- 'CXXMFT',
- 'CYYMFT',
- 'CPhiPhiMFT',
- 'CTglTglMFT',
- 'C1Pt1PtMFT',
- 'CTglXMFT',
- 'CTglYMFT',
- 'CTglPhiMFT',
- 'C1PtXMFT',
- 'C1PtYMFT',
- 'C1PtPhiMFT',
- 'C1PtTglMFT',
- 'etaMFT',
- 'DeltaEta',
- 'DeltaX',
- 'DeltaY',
- 'DeltaPhi',
- 'ADeltaPhi',
- 'ADeltaX',
- 'ADeltaY',
- 'DeltaR',
- 'SameSign',
- 'PtMCH',
- 'PtMFT',
- 'RelPtDiff',
- 'PullPt',
- 'PullX',
- 'PullY',
- 'PullR',
- 'PullPhi',
- 'PullTanl',
- 'APullX',
- 'APullY',
- 'APullPhi',
- 'DeltaDirection']
-
-FEATURES_PBPB_UNCORRELATED = ['XMCH',
- 'YMCH',
- 'PhiMCH',
- 'etaMCH',
- 'InvQPtMCH',
- 'Chi2MCH',
- 'PDCA',
- 'Rabs',
- 'CYYMCH',
- 'CPhiPhiMCH',
- 'CTglTglMCH',
- 'CXYMCH',
- 'CTglXMCH',
- 'CTglYMCH',
- 'CTglPhiMCH',
- 'C1PtXMCH',
- 'C1PtYMCH',
- 'C1PtPhiMCH',
- 'C1PtTglMCH',
- 'XMFT',
- 'YMFT',
- 'DeltaTanl',
- 'InvQPtMFT',
- 'Chi2MFT',
- 'TrackTypeMFT',
- 'CPhiPhiMFT',
- 'C1Pt1PtMFT',
- 'C1PtYMFT',
- 'DCAX',
- 'DCAY',
- 'IsAmbig',
- 'MFTMult',
- 'etaMFT',
- 'DeltaEta',
- 'DeltaX',
- 'DeltaY',
- 'DeltaPhi',
- 'ADeltaPhi',
- 'ADeltaX',
- 'ADeltaY',
- 'DeltaR',
- 'SameSign',
- 'PtMCH',
- 'PtMFT',
- 'RelPtDiff',
- 'PullPt',
- 'PullX',
- 'PullY',
- 'PullR',
- 'PullPhi',
- 'PullTanl',
- 'APullX',
- 'APullY',
- 'APullPhi',
- 'DeltaDirection']
-
-
 def get_dataframe(file_path: str, folder_name: str ) -> pd.DataFrame:
     df = TreeHandler(file_path, "O2fwdmlcand", folder_name=folder_name).get_data_frame()
     df.columns = df.columns.str.replace(r'^f', '', regex=True) # Drop leading 'f'
@@ -208,13 +94,13 @@ def get_dataframe(file_path: str, folder_name: str ) -> pd.DataFrame:
 def process_dataframe(df: pd.DataFrame, makedummies: bool) -> pd.DataFrame:
     # --- 1. Perform cuts ---
     df = perform_cuts(df) 
-
+    print(f"After cuts, shape: {df.shape}")
     # --- 2. Design features ---
     df = design_features(df)
-
+    print(f"After feature design, shape: {df.shape}")
     # --- 3. Add dummy candidates for non-pairable groups ---
     if makedummies:
-        df = add_dummy_candidates(df, FEATURES=[f for f in df.columns.tolist() if f not in NON_TRAINING_FEATURES], group_col="mchID", signal_col="IsSignal", matchlabel_col="MatchLabel", dummy_flag_col="is_dummy", k_std=3.0)
+        df = add_dummy_candidates(df, FEATURES=[f for f in df.columns.tolist() if f not in NON_TRAINING_FEATURES], group_col="mchID", signal_col="IsSignal", matchlabel_col="MatchLabel", dummy_flag_col="is_dummy")
         print(f"Added dummy candidates. New shape: {df.shape}")
     
     return df
@@ -222,57 +108,62 @@ def process_dataframe(df: pd.DataFrame, makedummies: bool) -> pd.DataFrame:
 
 def design_features(df: pd.DataFrame) -> pd.DataFrame:
     
-    df['etaMCH'] = np.arcsinh(df['TanlMCH'])
-    df['etaMFT'] = np.arcsinh(df['TanlMFT'])
-    df['DeltaEta'] = df['etaMCH'] - df['etaMFT']
+    df['etaMCH'] = np.arcsinh(df['TanlMCH']).astype(np.float32)
+    df['etaMFT'] = np.arcsinh(df['TanlMFT']).astype(np.float32)
+    df['DeltaEta'] = (df['etaMCH'] - df['etaMFT']).astype(np.float32)
 
-    df['DCAXY'] = np.sqrt(df['DCAX']**2+ df['DCAY']**2)
+    df['DCAXY'] = np.sqrt(df['DCAX']**2 + df['DCAY']**2).astype(np.float32)
 
     df["is_dummy"] = 0 # ensure the column exists even if we are not adding dummy candidates - will be 0 for all real candidates
 
-    df['DeltaX'] = df['XMCH'] - df['XMFT']
-    df['DeltaY'] = df['YMCH'] - df['YMFT']
-    dphi = df['PhiMCH'] - df['PhiMFT']
-    df['DeltaPhi'] = np.arctan2(np.sin(dphi), np.cos(dphi))
-    df['ADeltaPhi'] = np.abs(df['DeltaPhi'])
-    df['ADeltaX'] = np.abs(df['DeltaX'])
-    df['ADeltaY'] = np.abs(df['DeltaY'])
+    df['DeltaX'] = (df['XMCH'] - df['XMFT']).astype(np.float32)
+    df['DeltaY'] = (df['YMCH'] - df['YMFT']).astype(np.float32)
+    dphi = (df['PhiMCH'] - df['PhiMFT']).astype(np.float32)
+    df['DeltaPhi'] = np.arctan2(np.sin(dphi), np.cos(dphi)).astype(np.float32)
+    df['ADeltaPhi'] = np.abs(df['DeltaPhi']).astype(np.float32)
+    df['ADeltaX'] = np.abs(df['DeltaX']).astype(np.float32)
+    df['ADeltaY'] = np.abs(df['DeltaY']).astype(np.float32)
 
-    df['DeltaTanl'] = df['TanlMCH'] - df['TanlMFT']
+    df['DeltaTanl'] = (df['TanlMCH'] - df['TanlMFT']).astype(np.float32)
 
-    df['DeltaR'] = np.hypot(df['DeltaX'], df['DeltaY'])
-    df['RMFT'] = np.hypot(df['XMFT'], df['YMFT'])
+    df['DeltaR'] = np.hypot(df['DeltaX'], df['DeltaY']).astype(np.float32)
+    df['RMFT'] = np.hypot(df['XMFT'], df['YMFT']).astype(np.float32)
 
     df['SameSign'] = (np.signbit(df['InvQPtMCH']) == np.signbit(df['InvQPtMFT'])).astype(np.int8)
-    df['PtMCH'] = 1 / np.abs(df['InvQPtMCH']) # Rocking only with the MCH Pt for now - gives a consistent value for eventual binning procedure
-    df['PtMFT'] = 1 / np.abs(df['InvQPtMFT'])
-    df['DeltaPt'] = df['PtMCH'] - df['PtMFT']
-    df['RelPtDiff'] = (df['DeltaPt']) / (df['PtMFT'] + df['PtMCH']) # relative curvature difference
-    df['PullPt'] = df['DeltaPt'] / np.sqrt(df['C1Pt1PtMCH']/df['InvQPtMCH']**4 + df['C1Pt1PtMFT']/df['InvQPtMFT']**4) # error stored is 1/pt's TODO: Fix to properly use uncertainties on Pt instead of 1/Pt
+    df['PtMCH'] = (1 / np.abs(df['InvQPtMCH'])).astype(np.float32) # Rocking only with the MCH Pt for now - gives a consistent value for eventual binning procedure
+    df['PtMFT'] = (1 / np.abs(df['InvQPtMFT'])).astype(np.float32)
+    df['DeltaPt'] = (df['PtMCH'] - df['PtMFT']).astype(np.float32)
+    df['RelPtDiff'] = (df['DeltaPt'] / (df['PtMFT'] + df['PtMCH'])).astype(np.float32) # relative curvature difference
+    df['PullPt'] = (df['DeltaPt'] / np.sqrt(df['C1Pt1PtMCH']/df['InvQPtMCH']**4 + df['C1Pt1PtMFT']/df['InvQPtMFT']**4)).astype(np.float32) # error stored is 1/pt's TODO: Fix to properly use uncertainties on Pt instead of 1/Pt
 
     mch_cols = ["XMCH", "YMCH", "PhiMCH", "TanlMCH", "InvQPtMCH"]
-    df["mchID"] = df.round(6).groupby(mch_cols, sort=False).ngroup()
+    group_keys = df[mch_cols].round(6)
+    df["mchID"] = (
+        group_keys.groupby(mch_cols, sort=False, dropna=False)
+        .ngroup()
+        .astype(np.int32, copy=False)
+    )
 
-    df['PullX'] = df['DeltaX'] / np.sqrt(df['CXXMCH'] + df['CXXMFT'])
-    df['PullY'] = df['DeltaY'] / np.sqrt(df['CYYMCH'] + df['CYYMFT'])
-    df['PullR'] = df['DeltaR'] / np.sqrt(df['CXXMCH'] + df['CXXMFT'] + df['CYYMCH'] + df['CYYMFT'])
-    df['PullPhi'] = df['DeltaPhi'] / np.sqrt(df['CPhiPhiMCH'] + df['CPhiPhiMFT'])
-    df['PullTanl'] = df['DeltaTanl'] / np.sqrt(df['CTglTglMCH'] + df['CTglTglMFT'])
-    df['APullX'] = np.abs(df['PullX'])
-    df['APullY'] = np.abs(df['PullY'])
-    df['APullPhi'] = np.abs(df['PullPhi'])
+    df['PullX'] = (df['DeltaX'] / np.sqrt(df['CXXMCH'] + df['CXXMFT'])).astype(np.float32)
+    df['PullY'] = (df['DeltaY'] / np.sqrt(df['CYYMCH'] + df['CYYMFT'])).astype(np.float32)
+    df['PullR'] = (df['DeltaR'] / np.sqrt(df['CXXMCH'] + df['CXXMFT'] + df['CYYMCH'] + df['CYYMFT'])).astype(np.float32)
+    df['PullPhi'] = (df['DeltaPhi'] / np.sqrt(df['CPhiPhiMCH'] + df['CPhiPhiMFT'])).astype(np.float32)
+    df['PullTanl'] = (df['DeltaTanl'] / np.sqrt(df['CTglTglMCH'] + df['CTglTglMFT'])).astype(np.float32)
+    df['APullX'] = np.abs(df['PullX']).astype(np.float32)
+    df['APullY'] = np.abs(df['PullY']).astype(np.float32)
+    df['APullPhi'] = np.abs(df['PullPhi']).astype(np.float32)
 
 
 
     cos_delta = (np.cos(df['PhiMCH']) * np.cos(df['PhiMFT']) + np.sin(df['PhiMCH']) * np.sin(df['PhiMFT']) + df['TanlMCH'] * df['TanlMFT']) / (np.sqrt(1 + df['TanlMCH']**2) * np.sqrt(1 + df['TanlMFT']**2))
-    df['DeltaDirection'] = np.arccos(np.clip(cos_delta, -1, 1)) # Clip for numerical stability
+    df['DeltaDirection'] = np.arccos(np.clip(cos_delta, -1, 1)).astype(np.float32) # Clip for numerical stability
     return df
 
 def add_dummy_candidates(df, FEATURES, group_col="mchID",
                          signal_col="IsSignal",
                          matchlabel_col="MatchLabel",
-                         dummy_flag_col="is_dummy",
-                         k_std=3.0):
+                         dummy_flag_col="is_dummy"
+                         ):
     """
     Add one dummy candidate per group for ranking with 'no match' handling.
 
@@ -290,60 +181,27 @@ def add_dummy_candidates(df, FEATURES, group_col="mchID",
         Column used for evaluation labeling.
     dummy_flag_col : str
         Name of dummy indicator column.
-    k_std : float
-        How far to push dummy features beyond max (controls "badness").
-
     Returns
     -------
     pd.DataFrame
         DataFrame with dummy candidates added.
     """
 
-    df = df.copy()
+    # --- 2. Prepare dummy rows in a vectorized way
+    excluded_cols = {dummy_flag_col, signal_col, matchlabel_col, group_col} # columns to not be set to 0
+    feature_cols = [feat for feat in FEATURES if feat not in excluded_cols] # columns to be set to 0
 
-    # --- 1. Add dummy flag to original data
-    df[dummy_flag_col] = 0 # already done in design_features to ensure the column exists before we add the dummy candidates - will be 0 for all real candidates and 1 for the dummy ones we add here
+    grouped = df.groupby(group_col, sort=False)
+    group_ids = grouped.size().index
+    has_signal = grouped[signal_col].any().to_numpy()
 
-    # --- 2. Precompute "bad" feature values
-    bad_feature_values = {}
-    for feat in FEATURES:
-        avgval = df[df["MatchLabel"].isin(MATCH_LABEL_GROUPS["Fake"])][feat].mean()
-        bad_feature_values[feat] = avgval #max_val + k_std * std_val
-        # push dummy features beyond the max to ensure they are "bad" and easily distinguishable from real candidates
-        #TODO: consider different bad feature generation - cannot have a single one for all of them - maybe something based on the group's values, or the underlying fake distribution?
-    # --- 3. Build dummy rows
-    dummy_rows = []
+    df_dummy = pd.DataFrame(0.0, index=np.arange(len(group_ids)), columns=feature_cols)
+    df_dummy.insert(0, group_col, group_ids)
+    df_dummy[dummy_flag_col] = 1
+    df_dummy[signal_col] = np.where(has_signal, 0, 1).astype(np.int8)
+    df_dummy[matchlabel_col] = 8
 
-    grouped = df.groupby(group_col)
-
-    for gid, group in grouped:
-        has_signal = (group[signal_col] == 1).any()
-
-        dummy_row = {}
-
-        # group id
-        dummy_row[group_col] = gid
-
-        # features → bad values
-        for feat in FEATURES:
-            dummy_row[feat] = bad_feature_values[feat]
-
-        # label this row as dummy.... not working???
-        dummy_row[dummy_flag_col] = 1
-
-        if has_signal:
-            dummy_row[signal_col] = 0  # real match exists
-        else:
-            dummy_row[signal_col] = 1  # dummy becomes the "true" match
-
-        # evaluation label
-        dummy_row[matchlabel_col] = 8
-
-        dummy_rows.append(dummy_row)
-
-    df_dummy = pd.DataFrame(dummy_rows)
-
-    # --- 4. Concatenate
+    # --- 3. Concatenate
     df_out = pd.concat([df, df_dummy], ignore_index=True)
 
     return df_out
@@ -376,13 +234,11 @@ def perform_cuts(df: pd.DataFrame) -> pd.DataFrame:
 
     # drop rows with negative MFT variances (GARBAGE) TODO: Confirm with Andrea how we should approach this?
     var_mask = (df['CXXMFT'] > 0) & (df['CYYMFT'] > 0) & (df['CPhiPhiMFT'] > 0) & (df['CTglTglMFT'] > 0) & (df['C1Pt1PtMFT'] > 0)
-    removed = df[~var_mask].copy()
-    print(removed) # temporary addition to invetigate the negative variances
-    r_rows = int(removed.shape[0])
-    r_sig  = int(pd.to_numeric(removed.get("IsSignal", 0), errors="coerce").sum())
-    r_bkg  = r_rows - r_sig
-    print(f"Removed rows with non-positive MFT variances: {r_rows}  signal={r_sig}  background={r_bkg}")
-    df = df[var_mask].reset_index(drop=True)
+    removed_rows = int((~var_mask).sum())
+    r_sig = int(pd.to_numeric(df.loc[~var_mask, "IsSignal"], errors="coerce").sum())
+    r_bkg = removed_rows - r_sig
+    print(f"Removed rows with non-positive MFT variances: {removed_rows}  signal={r_sig}  background={r_bkg}")
+    df = df.loc[var_mask].reset_index(drop=True)
 
     # wrap mft phi to [-pi, pi] --- right way to go about it, the outside of -pi->pi values are for the MFT tracks that take a helical path
     df['PhiMFT'] = np.arctan2(np.sin(df['PhiMFT']), np.cos(df['PhiMFT']))
@@ -417,15 +273,19 @@ def inhousemetrics(
     idx = df.groupby("mchID")[metric].idxmax()
     best = df.loc[idx].set_index("mchID")
 
+    #TODO: Revise the dummy candidates configuration
+    # TODO: revise pairable definition - this still includes wrongs in pairable
     pairable = (
         df["MatchLabel"].isin(MATCH_LABEL_GROUPS["True"] + MATCH_LABEL_GROUPS["Wrong"])
         & (df["is_dummy"] == 0)
-    ).groupby(df["mchID"]).any()    
+    ).groupby(df["mchID"]).any() 
+
     FakeNMissing = ~(
         ((df["IsSignal"] == 1) & (df["is_dummy"] == 0))
         .groupby(df["mchID"])
         .any()
     )
+
     is_reconstructed = (best[metric] > threshold) & (best["is_dummy"] == 0)
     # --- true match correctly reconstructed ---
     is_true = best["IsSignal"] == 1 # a bit debatable since this includes the dummy candidates
@@ -597,6 +457,7 @@ def draw_feature(
     density: bool = True,
     title: Optional[str] = None,
     save_path: Optional[str] = None,
+    **kwargs,
 ) -> None:
     """
     Plot a histogram, normalised or not, (continuous) or grouped bar chart (categorical)
@@ -689,6 +550,7 @@ def draw_feature(
                 density=density,
                 color=colours.get(label, None),
                 label=f"{label}  (n={len(group):,})",
+                **kwargs
             )
     ax.set_ylabel("Density" if density else "Counts", fontsize=20, labelpad=15)
     ax.set_xlabel(feature, fontsize=20, labelpad=15)
