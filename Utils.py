@@ -431,6 +431,174 @@ def plot_metrics_vs_feature(
     return result_df
 
 
+def plot_metrics_vs_xy(
+    df: pd.DataFrame,
+    feature_x: str,
+    feature_y: str,
+    threshold: float,
+    metrics_fn,
+    metric_col_prefix: str = "score",
+    x_bins: Optional[Union[int, np.ndarray]] = 10,
+    y_bins: Optional[Union[int, np.ndarray]] = 10,
+    fmin_x: Optional[float] = None,
+    fmax_x: Optional[float] = None,
+    fmin_y: Optional[float] = None,
+    fmax_y: Optional[float] = None,
+    trim_low: float = 0.0,
+    trim_high: float = 0.0,
+    Nsigma: float = 3.0,
+    cmap: str = "viridis",
+    surface_alpha: float = 0.9,
+):
+    """Plot inhouse metrics as a function of two features.
+
+    The function computes metrics in 2D bins over (feature_x, feature_y) and
+    creates a separate surface plot for each metric returned by `metrics_fn`.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Input dataframe containing features and score.
+    feature_x : str
+        Column name for the x axis.
+    feature_y : str
+        Column name for the y axis.
+    threshold : float
+        Score threshold passed to `metrics_fn`.
+    metrics_fn : callable
+        A function like `inhousemetrics` that returns a dataframe of metric
+        rows with columns ['metric', 'value', 'uncertainty', 'num', 'den'].
+    metric_col_prefix : str
+        Score column name used by `metrics_fn`.
+    x_bins, y_bins : int or array-like
+        Number of bins or explicit bin edges for the x and y axes.
+    fmin_x, fmax_x, fmin_y, fmax_y : float
+        Optional axis bounds. Defaults to the data range.
+    trim_low, trim_high : float
+        Optional quantile trimming for both axes.
+    Nsigma : float
+        Uncertainty band scaling passed to `metrics_fn`.
+    cmap : str
+        Matplotlib colormap for the surface.
+    surface_alpha : float
+        Opacity of the surface plot.
+    """
+
+    df = df.copy()
+
+    if trim_low > 0 or trim_high > 0:
+        x_low_q = df[feature_x].quantile(trim_low)
+        x_high_q = df[feature_x].quantile(1 - trim_high)
+        y_low_q = df[feature_y].quantile(trim_low)
+        y_high_q = df[feature_y].quantile(1 - trim_high)
+        df = df[
+            (df[feature_x] >= x_low_q)
+            & (df[feature_x] <= x_high_q)
+            & (df[feature_y] >= y_low_q)
+            & (df[feature_y] <= y_high_q)
+        ]
+
+    if fmin_x is None:
+        fmin_x = df[feature_x].min()
+    if fmax_x is None:
+        fmax_x = df[feature_x].max()
+    if fmin_y is None:
+        fmin_y = df[feature_y].min()
+    if fmax_y is None:
+        fmax_y = df[feature_y].max()
+
+    def _bin_edges(name, bins, vmin, vmax):
+        if isinstance(bins, (np.ndarray, list)):
+            return np.asarray(bins, dtype=float)
+        if isinstance(bins, int):
+            return np.linspace(vmin, vmax, bins + 1)
+        raise ValueError(f"{name} must be int or array-like")
+
+    x_edges = _bin_edges("x_bins", x_bins, fmin_x, fmax_x)
+    y_edges = _bin_edges("y_bins", y_bins, fmin_y, fmax_y)
+
+    all_results = []
+
+    for ix in range(len(x_edges) - 1):
+        x_low, x_high = x_edges[ix], x_edges[ix + 1]
+        x_center = 0.5 * (x_low + x_high)
+
+        for iy in range(len(y_edges) - 1):
+            y_low, y_high = y_edges[iy], y_edges[iy + 1]
+            y_center = 0.5 * (y_low + y_high)
+
+            if ix == len(x_edges) - 2:
+                mask_x = (df[feature_x] >= x_low) & (df[feature_x] <= x_high)
+            else:
+                mask_x = (df[feature_x] >= x_low) & (df[feature_x] < x_high)
+
+            if iy == len(y_edges) - 2:
+                mask_y = (df[feature_y] >= y_low) & (df[feature_y] <= y_high)
+            else:
+                mask_y = (df[feature_y] >= y_low) & (df[feature_y] < y_high)
+
+            df_bin = df[mask_x & mask_y]
+            if len(df_bin) == 0:
+                continue
+
+            df_metrics = metrics_fn(
+                df_bin,
+                threshold=threshold,
+                metric=metric_col_prefix,
+                Nsigma=Nsigma,
+            )
+
+            df_metrics = df_metrics.copy()
+            df_metrics["bin_low_x"] = x_low
+            df_metrics["bin_high_x"] = x_high
+            df_metrics["bin_center_x"] = x_center
+            df_metrics["bin_low_y"] = y_low
+            df_metrics["bin_high_y"] = y_high
+            df_metrics["bin_center_y"] = y_center
+            df_metrics["entries"] = len(df_bin)
+            all_results.append(df_metrics)
+
+    if len(all_results) == 0:
+        raise ValueError("No data available in the requested x/y binning range.")
+
+    result_df = pd.concat(all_results, ignore_index=True)
+
+    metrics = result_df["metric"].unique()
+    n_metrics = len(metrics)
+    ncols = min(3, n_metrics)
+    nrows = int(np.ceil(n_metrics / ncols))
+
+    fig = plt.figure(figsize=(6 * ncols, 5 * nrows))
+
+    for mi, metric in enumerate(metrics, start=1):
+        subdf = result_df[result_df["metric"] == metric]
+
+        x_centers = np.sort(subdf["bin_center_x"].unique())
+        y_centers = np.sort(subdf["bin_center_y"].unique())
+
+        Z = subdf.pivot(
+            index="bin_center_y",
+            columns="bin_center_x",
+            values="value",
+        ).reindex(index=y_centers, columns=x_centers).to_numpy()
+
+        X, Y = np.meshgrid(x_centers, y_centers)
+
+        ax = fig.add_subplot(nrows, ncols, mi, projection="3d")
+        ax.plot_surface(X, Y, Z, cmap=cmap, alpha=surface_alpha, edgecolor="none")
+        ax.contour(X, Y, Z, zdir="z", offset=np.nanmin(Z), cmap=cmap, linestyles="solid", alpha=0.6)
+
+        ax.set_title(metric)
+        ax.set_xlabel(feature_x)
+        ax.set_ylabel(feature_y)
+        ax.set_zlabel("Value")
+
+    plt.tight_layout()
+    plt.show()
+
+    return result_df
+
+
 def build_match_groups(
     df: pd.DataFrame,
     label_col: str = "MatchLabel",
