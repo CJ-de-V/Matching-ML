@@ -2,6 +2,8 @@
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 from hipe4ml.tree_handler import TreeHandler
 from typing import Optional, Union
 
@@ -273,11 +275,11 @@ def inhousemetrics(
     idx = df.groupby("mchID")[metric].idxmax()
     best = df.loc[idx].set_index("mchID")
 
-    #TODO: Revise the dummy candidates configuration
+    # TODO: Revise the dummy candidates configuration
     # TODO: revise pairable definition - this still includes wrongs in pairable
     pairable = (
         df["MatchLabel"].isin(MATCH_LABEL_GROUPS["True"] + MATCH_LABEL_GROUPS["Wrong"])
-        & (df["is_dummy"] == 0)
+        & (df["is_dummy"] == 0) # Ensures that dummies are not included in our definition of pairable... but we do include missing?... metrics are due for a revision
     ).groupby(df["mchID"]).any() 
 
     FakeNMissing = ~(
@@ -401,32 +403,35 @@ def plot_metrics_vs_feature(
     result_df = pd.concat(all_results, ignore_index=True)
 
     # --- Plot ---
-    plt.figure(figsize=(9, 6))
+    fig = go.Figure()
 
     for metric, subdf in result_df.groupby("metric"):
-
-        # Skip broken metrics
         if subdf["value"].isna().all():
             print(f"[WARN] {metric} is all NaN → skipped")
             continue
 
-        plt.errorbar(
-            subdf["bin_center"],
-            subdf["value"],
-            yerr=subdf["uncertainty"],
-            xerr=subdf["bin_width"],
-            fmt='o',
-            capsize=3,
-            label=metric,
+        fig.add_trace(
+            go.Scatter(
+                x=subdf["bin_center"],
+                y=subdf["value"],
+                error_y=dict(
+                    type="data",
+                    array=subdf["uncertainty"],
+                    visible=True,
+                ),
+                mode="markers+lines",
+                name=metric,
+            )
         )
 
-    plt.xlabel(feature)
-    plt.ylabel("Metric")
-    plt.title(f"Metrics vs {feature} (threshold={threshold})")
-    plt.legend()
-    plt.grid(True)
+    fig.update_layout(
+        title=f"Metrics vs {feature} (threshold={threshold})",
+        xaxis_title=feature,
+        yaxis_title="Metric",
+        template="plotly_white",
+    )
 
-    plt.show()
+    fig.show()
 
     return result_df
 
@@ -565,12 +570,26 @@ def plot_metrics_vs_xy(
 
     metrics = result_df["metric"].unique()
     n_metrics = len(metrics)
-    ncols = min(3, n_metrics)
+    ncols = min(2, n_metrics)
     nrows = int(np.ceil(n_metrics / ncols))
 
-    fig = plt.figure(figsize=(6 * ncols, 5 * nrows))
+    zmin = result_df["value"].min()
+    zmax = result_df["value"].max()
 
-    for mi, metric in enumerate(metrics, start=1):
+    fig = make_subplots(
+        rows=nrows,
+        cols=ncols,
+        subplot_titles=list(metrics),
+        horizontal_spacing=0.12,
+        vertical_spacing=0.12,
+        specs=[[{"type": "xy"} for _ in range(ncols)] for _ in range(nrows)],
+    )
+
+    first_colorbar = True
+
+    for metric_idx, metric in enumerate(metrics):
+        row = metric_idx // ncols + 1
+        col = metric_idx % ncols + 1
         subdf = result_df[result_df["metric"] == metric]
 
         x_centers = np.sort(subdf["bin_center_x"].unique())
@@ -582,19 +601,73 @@ def plot_metrics_vs_xy(
             values="value",
         ).reindex(index=y_centers, columns=x_centers).to_numpy()
 
-        X, Y = np.meshgrid(x_centers, y_centers)
+        den = subdf.pivot(
+            index="bin_center_y",
+            columns="bin_center_x",
+            values="den",
+        ).reindex(index=y_centers, columns=x_centers).to_numpy()
 
-        ax = fig.add_subplot(nrows, ncols, mi, projection="3d")
-        ax.plot_surface(X, Y, Z, cmap=cmap, alpha=surface_alpha, edgecolor="none")
-        ax.contour(X, Y, Z, zdir="z", offset=np.nanmin(Z), cmap=cmap, linestyles="solid", alpha=0.6)
+        num = subdf.pivot(
+            index="bin_center_y",
+            columns="bin_center_x",
+            values="num",
+        ).reindex(index=y_centers, columns=x_centers).to_numpy()
 
-        ax.set_title(metric)
-        ax.set_xlabel(feature_x)
-        ax.set_ylabel(feature_y)
-        ax.set_zlabel("Value")
+        entries = subdf.pivot(
+            index="bin_center_y",
+            columns="bin_center_x",
+            values="entries",
+        ).reindex(index=y_centers, columns=x_centers).to_numpy()
 
-    plt.tight_layout()
-    plt.show()
+        customdata = np.stack([den, num, entries], axis=-1)
+
+        colorbar = dict(title="Value", len=0.8, yanchor="middle", y=0.5, x=1.02)
+        if not first_colorbar:
+            colorbar = None
+
+        heatmap_kwargs = {
+            "x": x_centers,
+            "y": y_centers,
+            "z": Z,
+            "colorscale": cmap,
+            "zmin": zmin,
+            "zmax": zmax,
+            "zsmooth": "best",
+            "customdata": customdata,
+            "hovertemplate": (
+                f"{feature_x}: %{{x:.3f}}<br>"
+                f"{feature_y}: %{{y:.3f}}<br>"
+                "Value: %{z:.3f}<br>"
+                "Num: %{customdata[1]}<br>"
+                "Den: %{customdata[0]}<br>"
+                "Entries: %{customdata[2]}<extra>" + metric + "</extra>"
+            ),
+            "showscale": first_colorbar,
+            "showlegend": False,
+        }
+        if colorbar is not None:
+            heatmap_kwargs["colorbar"] = colorbar
+
+        fig.add_trace(
+            go.Heatmap(**heatmap_kwargs),
+            row=row,
+            col=col,
+        )
+
+        fig.update_xaxes(title_text=feature_x, row=row, col=col)
+        fig.update_yaxes(title_text=feature_y, row=row, col=col)
+
+        first_colorbar = False
+
+    fig.update_layout(
+        title_text=f"Metrics vs {feature_x} and {feature_y} (threshold={threshold})",
+        template="plotly_white",
+        height=450 * nrows,
+        width=700 * ncols,
+        showlegend=False,
+    )
+
+    fig.show()
 
     return result_df
 

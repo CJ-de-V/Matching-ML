@@ -4,6 +4,9 @@ import matplotlib.pyplot as plt
 import Utils
 from sklearn.calibration import calibration_curve
 from sklearn.model_selection import GroupShuffleSplit
+import seaborn as sns
+from sklearn.metrics import classification_report, confusion_matrix, accuracy_score, auc, precision_recall_curve
+
 
 
 def PeekData (df : pd.DataFrame) -> None:
@@ -80,3 +83,70 @@ def splitter_internal( df:pd.DataFrame, test_frac:float):
     df_test = df.iloc[test_idx]
 
     return df_temp, df_test
+
+
+
+def cm(y_pred, y_true, normalize=None):
+    # Compute confusion matrix
+    cm = confusion_matrix(y_true, y_pred, normalize=normalize)
+    label_names = ["Not True","True"]
+
+    # Plot confusion matrix
+    fig, ax = plt.subplots(figsize=(8, 7))
+    sns.heatmap(cm, annot=True, fmt='f', cmap='Blues', 
+                xticklabels=label_names, yticklabels=label_names,
+                ax=ax, cbar_kws={'label': 'Proportion' if normalize else 'Count'})
+    ax.set_xlabel('Predicted Label')
+    ax.set_ylabel('True Label')
+    ax.set_title('Confusion Matrix - Test Set')
+    plt.tight_layout()
+    plt.show()
+
+    # Print classification metrics
+    print("Classification Report:")
+    print(classification_report(y_true, y_pred, target_names=label_names))
+    print(f"\nOverall Accuracy: {accuracy_score(y_true, y_pred):.4f}")
+
+    # Per-class metrics
+    print("\nPer-class Performance:")
+    for i, label in enumerate(label_names):
+        tn = cm.sum() - cm[i].sum() - cm[:, i].sum() + cm[i, i]
+        tp = cm[i, i]
+        fp = cm[:, i].sum() - cm[i, i]
+        fn = cm[i].sum() - cm[i, i]
+        
+        recall = tp / (tp + fn) if (tp + fn) > 0 else 0
+        precision = tp / (tp + fp) if (tp + fp) > 0 else 0
+        f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
+        
+        print(f"  {label:<8} - Precision: {precision:.4f}, Recall: {recall:.4f}, F1: {f1:.4f}")
+
+
+def pr(y_pred, y_true):
+
+    precision, recall, _ = precision_recall_curve(y_true=y_true, y_score=y_pred)
+    auc_pr = auc(recall, precision)
+    positive_rate = y_true.mean()
+
+    # Ideal starts at (0,1), moves to (1,1) for perfect recall, then drops to (1, proportion of positives)
+    ideal_recall = [0, 1, 1]
+    ideal_precision = [1, 1, positive_rate]
+
+    # Random model baseline is a horizontal line at the positive class fraction
+    random_recall = [0, 1]
+    random_precision = [positive_rate, positive_rate]
+
+    plt.figure(figsize=(7, 5))
+    plt.plot(recall, precision, label='Actual Model', color='blue', lw=2)
+    plt.plot(random_recall, random_precision, label='Random Baseline', color='gray', linestyle=':', lw=2)
+    plt.plot(ideal_recall, ideal_precision, label='Ideal Model', color='green', linestyle='--', lw=2)
+
+    plt.xlabel('Recall')
+    plt.ylabel('Precision')
+    plt.title('Precision-Recall Curve')
+    plt.legend(loc='lower left')
+    plt.grid(True)
+    plt.text(0.95, 0.05, f'AUC-PR = {auc_pr:.4f}', ha='right', va='bottom', transform=plt.gca().transAxes,
+             bbox=dict(facecolor='white', edgecolor='black', boxstyle='round,pad=0.3'))
+    plt.show()
+    print(f"Area under Precision-Recall Curve (AUC-PR): {auc_pr:.4f}")
