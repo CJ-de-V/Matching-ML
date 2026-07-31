@@ -42,7 +42,7 @@ NON_TRAINING_FEATURES = [
 
     # features we exclude based on bias & selection cuts, i.e. we do not want our model to discriminate based on these, since it learns what we tell it to, not what we intend for it to
     # Otherwise we risk it learning for example that non-prompts are bad
-    'DCAX', 'DCAY', 'PDCA', 'DCAXY', 'Rabs', 'IsAmbig', 'Chi2MCH', 'Chi2MFT', 'MFTMult'
+    'DCAX', 'DCAY', 'PDCA', 'DCAXY', 'Rabs', 'IsAmbig', 'Chi2MCH', 'Chi2MFT', 'MFTMult', 'MatchAttempts',
     ]
 
 # TODO: ensure these features are not read in training to save on space
