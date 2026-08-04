@@ -31,29 +31,39 @@ DESIGNED_FEATURES = [
     'APullX', 'APullY', 'APullPhi',# Absolute value of the pulls - maybe not useful but could be for the model to have access to the magnitude of the disagreement regardless of direction
     ]
 
-NON_TRAINING_FEATURES = [
+NON_TRAINING_FEATURES = [ # features taht are unsuitable for training, but are still read in for other uses like labelling and analysis
     'mchID',
-    'TimeMCH', 'TimeResMCH', 'TimeMFT', 'TimeResMFT', 
-    'MftClusterSizesAndTrackFlags', 
-    'Chi2Glob', 'Chi2Match', # temporarily included in training and evaluation
-    'McMaskMCH', 'McMaskMFT', 'McMaskGlob',
     'MatchLabel', 'IsSignal',
-    #, 'is_dummy', # Added is_dummy as we are not currently using it and don't want it in the o2 without use
-
     # features we exclude based on bias & selection cuts, i.e. we do not want our model to discriminate based on these, since it learns what we tell it to, not what we intend for it to
     # Otherwise we risk it learning for example that non-prompts are bad
+    # Interpretation still pending
     'DCAX', 'DCAY', 'PDCA', 'DCAXY', 'Rabs', 'IsAmbig', 'Chi2MCH', 'Chi2MFT', 'MFTMult', 'MatchAttempts',
     ]
 
-# TODO: ensure these features are not read in training to save on space
+
+ALL_FEATURES = ['fXMCH', 'fYMCH', 'fPhiMCH', 'fTanlMCH', 'fInvQPtMCH', 'fTimeMCH',
+       'fTimeResMCH', 'fChi2MCH', 'fPDCA', 'fRabs', 'fCXXMCH', 'fCYYMCH',
+       'fCPhiPhiMCH', 'fCTglTglMCH', 'fC1Pt1PtMCH', 'fCXYMCH', 'fCPhiYMCH',
+       'fCPhiXMCH', 'fCTglXMCH', 'fCTglYMCH', 'fCTglPhiMCH', 'fC1PtXMCH',
+       'fC1PtYMCH', 'fC1PtPhiMCH', 'fC1PtTglMCH', 'fXMFT', 'fYMFT', 'fPhiMFT',
+       'fTanlMFT', 'fInvQPtMFT', 'fTimeMFT', 'fTimeResMFT', 'fChi2MFT',
+       'fMftClusterSizesAndTrackFlags', 'fTrackTypeMFT', 'fCXXMFT', 'fCYYMFT',
+       'fCPhiPhiMFT', 'fCTglTglMFT', 'fC1Pt1PtMFT', 'fCXYMFT', 'fCPhiYMFT',
+       'fCPhiXMFT', 'fCTglXMFT', 'fCTglYMFT', 'fCTglPhiMFT', 'fC1PtXMFT',
+       'fC1PtYMFT', 'fC1PtPhiMFT', 'fC1PtTglMFT', 'fChi2Glob', 'fChi2Match',
+       'fDCAX', 'fDCAY', 'fIsAmbig', 'fMFTMult', 'fMatchAttempts',
+       'fMcMaskMCH', 'fMcMaskMFT', 'fMcMaskGlob', 'fMatchLabel', 'fIsSignal']
+
 SKIPPED_FEATURES  = [
-    'TimeMCH', 'TimeResMCH', 'TimeMFT', 'TimeResMFT', 
-    'MftClusterSizesAndTrackFlags', 
-    'Chi2Glob', 'Chi2Match', # temporarily included in training and evaluation
-    'McMaskMCH', 'McMaskMFT', 'McMaskGlob',
+    'fTimeMCH', 'fTimeResMCH', 'fTimeMFT', 'fTimeResMFT', 
+    'fMftClusterSizesAndTrackFlags', 
+    'fChi2Glob', 'fChi2Match',
+    'fMcMaskMCH', 'fMcMaskMFT', 'fMcMaskGlob',
     ]
 
-#TODO: use this instead of the mch features to assign groups, do metric plotting as a function of these for evluation
+READ_FEATURES = [f for f in ALL_FEATURES if f not in SKIPPED_FEATURES]
+
+#NOTE: Once we run into issues with overlaps in MCHID we can consider using more features to define the group, for now this is sufficient
 GROUP_PRESERVING_FEATURES = [
     'XMCH', 'YMCH', 'PhiMCH', 'TanlMCH', 'InvQPtMCH', "chi2MCH",
     'Chi2MCH', 'PDCA', 'Rabs', 'CXXMCH', 'CYYMCH', 'CPhiPhiMCH', 'CTglTglMCH', 'C1Pt1PtMCH'
@@ -85,7 +95,7 @@ def subsample(df: pd.DataFrame, frac: float = 0.5) -> pd.DataFrame:
 
 
 def get_dataframe(file_path: str, folder_name: str ) -> pd.DataFrame:
-    df = TreeHandler(file_path, "O2fwdmlcand", folder_name=folder_name).get_data_frame()
+    df = TreeHandler(file_path, "O2fwdmlcand", folder_name=folder_name, column_names=READ_FEATURES).get_data_frame()
     df.columns = df.columns.str.replace(r'^f', '', regex=True) # Drop leading 'f'
     bool_cols = df.select_dtypes(include='bool').columns
     if len(bool_cols) > 0:
