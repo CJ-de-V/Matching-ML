@@ -22,7 +22,9 @@ DESIGNED_FEATURES = [
 
     'DeltaDirection', # angle between MCH and MFT track directions
     
-    'PtMCH', 'PtMFT', 'DeltaPt', 'PullPt', 'RelPtDiff', # Pt difference / sum of Pt magnitudes
+    'PtMCH', 'PtMFT', 'DeltaPt', 'PullPt', 'RelPtDiff',
+    
+    'PMCH', 'PMFT', 'DeltaP', 'RelPDiff',
 
     'etaMCH', 'etaMFT', 'DeltaEta', 
 
@@ -30,6 +32,7 @@ DESIGNED_FEATURES = [
     
     'APullX', 'APullY', 'APullPhi',# Absolute value of the pulls - maybe not useful but could be for the model to have access to the magnitude of the disagreement regardless of direction
     ]
+
 
 NON_TRAINING_FEATURES = [ # features taht are unsuitable for training, but are still read in for other uses like labelling and analysis
     'mchID',
@@ -105,6 +108,10 @@ def get_dataframe(file_path: str, folder_name: str ) -> pd.DataFrame:
     return df
 
 def process_dataframe(df: pd.DataFrame, makedummies: bool = False) -> pd.DataFrame:
+
+    # Added here to dodge errors hopefully:
+    df['PhiMFT'] = np.arctan2(np.sin(df['PhiMFT']), np.cos(df['PhiMFT']))
+
     df = design_features(df)
     print(f"After feature design, shape: {df.shape}")
 
@@ -121,7 +128,6 @@ def process_dataframe(df: pd.DataFrame, makedummies: bool = False) -> pd.DataFra
 
 def design_features(df: pd.DataFrame) -> pd.DataFrame:
     
-    df['PhiMFT'] = np.arctan2(np.sin(df['PhiMFT']), np.cos(df['PhiMFT']))
 
     df['etaMCH'] = np.arcsinh(df['TanlMCH']).astype(np.float32)
     df['etaMFT'] = np.arcsinh(df['TanlMFT']).astype(np.float32)
@@ -140,17 +146,21 @@ def design_features(df: pd.DataFrame) -> pd.DataFrame:
     df['ADeltaY'] = np.abs(df['DeltaY']).astype(np.float32)
 
     df['DeltaTanl'] = (df['TanlMCH'] - df['TanlMFT']).astype(np.float32)
-
     df['DeltaR'] = np.hypot(df['DeltaX'], df['DeltaY']).astype(np.float32)
+
     df['RMFT'] = np.hypot(df['XMFT'], df['YMFT']).astype(np.float32)
 
     df['SameSign'] = (np.signbit(df['InvQPtMCH']) == np.signbit(df['InvQPtMFT'])).astype(np.int8)
+
     df['PtMCH'] = (1 / np.abs(df['InvQPtMCH'])).astype(np.float32)
     df['PtMFT'] = (1 / np.abs(df['InvQPtMFT'])).astype(np.float32)
     df['DeltaPt'] = (df['PtMCH'] - df['PtMFT']).astype(np.float32)
     df['RelPtDiff'] = (df['DeltaPt'] / (df['PtMFT'] + df['PtMCH'])).astype(np.float32) # relative pt difference
-    df['PullPt'] = (df['DeltaPt'] / np.sqrt(df['C1Pt1PtMCH']/df['InvQPtMCH']**4 + df['C1Pt1PtMFT']/df['InvQPtMFT']**4)).astype(np.float32)
-    # TODO: formula seems appropriate, but the plot for the pull is non-gaussian
+
+    df['PMCH'] = (df['PtMCH'] * np.sqrt(1 + df['TanlMCH']**2)).astype(np.float32)
+    df['PMFT'] = (df['PtMFT'] * np.sqrt(1 + df['TanlMFT']**2)).astype(np.float32)
+    df['DeltaP'] = (df['PMCH'] - df['PMFT']).astype(np.float32)
+    df['RelPDiff'] = (df['DeltaP'] / (df['PMFT'] + df['PMCH'])).astype(np.float32) # relative p difference
 
     mch_cols = ["XMCH", "YMCH", "PhiMCH", "TanlMCH", "InvQPtMCH"]
     group_keys = df[mch_cols].round(6)
@@ -168,7 +178,8 @@ def design_features(df: pd.DataFrame) -> pd.DataFrame:
     df['APullX'] = np.abs(df['PullX']).astype(np.float32)
     df['APullY'] = np.abs(df['PullY']).astype(np.float32)
     df['APullPhi'] = np.abs(df['PullPhi']).astype(np.float32)
-
+    df['PullPt'] = (df['DeltaPt'] / np.sqrt(df['C1Pt1PtMCH']/df['InvQPtMCH']**4 + df['C1Pt1PtMFT']/df['InvQPtMFT']**4)).astype(np.float32)
+    # NOTE: formula seems appropriate, but the plot for the pull is non-gaussian
 
 
     cos_delta = (np.cos(df['PhiMCH']) * np.cos(df['PhiMFT']) + np.sin(df['PhiMCH']) * np.sin(df['PhiMFT']) + df['TanlMCH'] * df['TanlMFT']) / (np.sqrt(1 + df['TanlMCH']**2) * np.sqrt(1 + df['TanlMFT']**2))
@@ -243,11 +254,11 @@ def perform_cuts(df: pd.DataFrame) -> pd.DataFrame:
     c1pt_vals = df["C1Pt1PtMFT"].to_numpy(dtype=np.float32, copy=False)
 
     # --- 1) Loose eta window ---
-    eta_mask = (eta_vals >= -3.7) & (eta_vals <= -2.4)
+    eta_mask = (eta_vals >= -3.6) & (eta_vals <= -2.5)
     removed_eta_rows = int((~eta_mask).sum())
     removed_eta_sig = int(signal_values[~eta_mask].sum())
     removed_eta_bkg = removed_eta_rows - removed_eta_sig
-    print("[Loose Eta window] -3.7 < eta_MFT < -2.4")
+    print("[Loose Eta window] -3.6 < eta_MFT < -2.5")
     print(
         f"Removed rows: {removed_eta_rows}  signal={removed_eta_sig}  background={removed_eta_bkg}"
     )
@@ -276,7 +287,7 @@ def perform_cuts(df: pd.DataFrame) -> pd.DataFrame:
         f"Removed rows with non-positive MFT variances: {removed_var_rows}  signal={removed_var_sig}  background={removed_var_bkg}"
     )
 
-    return df.loc[final_mask].reset_index(drop=True)
+    return df.loc[final_mask] #.reset_index(drop=True) NOTE: disabled for memory reasons
 
 def add_null_rows_for_non_pairable(df: pd.DataFrame) -> pd.DataFrame:
     # Identify pairable mchIDs
@@ -313,7 +324,8 @@ def inhousemetrics(
     # In the realm of ~1-5% for OO vs PbPb
     # Need to decide on this at some point, depends on if we want to asess the model's maximal achievable performance or the performance on real data....
     pairable = (
-        df["MatchLabel"].isin(MATCH_LABEL_GROUPS["True"] + MATCH_LABEL_GROUPS["Wrong"])
+        df["MatchLabel"].isin(MATCH_LABEL_GROUPS["True"])
+        #  TODO/NOTE temporarily removed missing matches + MATCH_LABEL_GROUPS["Wrong"] - missing matches are now - in my opinion - correctly classified as non-pairable
         # & (df["is_dummy"] == 0) # Ensures that dummies are not included in our definition of pairable... but we do include missing?... metrics are due for a revision
     ).groupby(df["mchID"]).any() 
 
