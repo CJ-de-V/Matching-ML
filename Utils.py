@@ -8,7 +8,7 @@ from hipe4ml.tree_handler import TreeHandler
 from typing import Optional, Union
 
 
-#TODO: Consider adding absolute value features for the symmetric(ish) pulls/deltas, add DCA_XY ALSO add some metric of total uncertainty... like something derived of the whole covariance matrix
+#TODO: Add some metric of total uncertainty... like something derived of the whole covariance matrix...that's dangerously close to CHI2 again.
 DESIGNED_FEATURES = [
     "mchID", "is_dummy", # Indexing and dummy flag
     
@@ -65,8 +65,9 @@ READ_FEATURES = [f for f in ALL_FEATURES if f not in SKIPPED_FEATURES]
 
 #NOTE: Once we run into issues with overlaps in MCHID we can consider using more features to define the group, for now this is sufficient
 GROUP_PRESERVING_FEATURES = [
-    'XMCH', 'YMCH', 'PhiMCH', 'TanlMCH', 'InvQPtMCH', "chi2MCH",
-    'Chi2MCH', 'PDCA', 'Rabs', 'CXXMCH', 'CYYMCH', 'CPhiPhiMCH', 'CTglTglMCH', 'C1Pt1PtMCH'
+    'XMCH', 'YMCH', 'PhiMCH', 'TanlMCH', 'InvQPtMCH',# "chi2MCH",
+    'Chi2MCH', 'PDCA', 'Rabs', 'CXXMCH', 'CYYMCH', 'CPhiPhiMCH', 'CTglTglMCH', 'C1Pt1PtMCH',
+    'MatchAttempts', 'MFTMult', 'PtMCH',
 ]
 
 MATCH_LABEL_GROUPS = {
@@ -103,13 +104,13 @@ def get_dataframe(file_path: str, folder_name: str ) -> pd.DataFrame:
         df[bool_cols] = df[bool_cols].astype(int)
     return df
 
-def process_dataframe(df: pd.DataFrame, makedummies: bool) -> pd.DataFrame:
-    # --- 1. Perform cuts ---
-    df = perform_cuts(df) 
-    print(f"After cuts, shape: {df.shape}")
-    # --- 2. Design features ---
+def process_dataframe(df: pd.DataFrame, makedummies: bool = False) -> pd.DataFrame:
     df = design_features(df)
     print(f"After feature design, shape: {df.shape}")
+
+    df = perform_cuts(df) 
+    print(f"After cuts, shape: {df.shape}")
+
     # --- 3. Add dummy candidates for non-pairable groups ---
     if makedummies:
         df = add_dummy_candidates(df, FEATURES=[f for f in df.columns.tolist() if f not in NON_TRAINING_FEATURES], group_col="mchID", signal_col="IsSignal", matchlabel_col="MatchLabel", dummy_flag_col="is_dummy")
@@ -120,13 +121,15 @@ def process_dataframe(df: pd.DataFrame, makedummies: bool) -> pd.DataFrame:
 
 def design_features(df: pd.DataFrame) -> pd.DataFrame:
     
+    df['PhiMFT'] = np.arctan2(np.sin(df['PhiMFT']), np.cos(df['PhiMFT']))
+
     df['etaMCH'] = np.arcsinh(df['TanlMCH']).astype(np.float32)
     df['etaMFT'] = np.arcsinh(df['TanlMFT']).astype(np.float32)
     df['DeltaEta'] = (df['etaMCH'] - df['etaMFT']).astype(np.float32)
 
     df['DCAXY'] = np.sqrt(df['DCAX']**2 + df['DCAY']**2).astype(np.float32)
 
-    df["is_dummy"] = 0 # ensure the column exists even if we are not adding dummy candidates - will be 0 for all real candidates
+    # df["is_dummy"] = 0 # terminated for now
 
     df['DeltaX'] = (df['XMCH'] - df['XMFT']).astype(np.float32)
     df['DeltaY'] = (df['YMCH'] - df['YMFT']).astype(np.float32)
@@ -142,11 +145,12 @@ def design_features(df: pd.DataFrame) -> pd.DataFrame:
     df['RMFT'] = np.hypot(df['XMFT'], df['YMFT']).astype(np.float32)
 
     df['SameSign'] = (np.signbit(df['InvQPtMCH']) == np.signbit(df['InvQPtMFT'])).astype(np.int8)
-    df['PtMCH'] = (1 / np.abs(df['InvQPtMCH'])).astype(np.float32) # Rocking only with the MCH Pt for now - gives a consistent value for eventual binning procedure
+    df['PtMCH'] = (1 / np.abs(df['InvQPtMCH'])).astype(np.float32)
     df['PtMFT'] = (1 / np.abs(df['InvQPtMFT'])).astype(np.float32)
     df['DeltaPt'] = (df['PtMCH'] - df['PtMFT']).astype(np.float32)
-    df['RelPtDiff'] = (df['DeltaPt'] / (df['PtMFT'] + df['PtMCH'])).astype(np.float32) # relative curvature difference
-    df['PullPt'] = (df['DeltaPt'] / np.sqrt(df['C1Pt1PtMCH']/df['InvQPtMCH']**4 + df['C1Pt1PtMFT']/df['InvQPtMFT']**4)).astype(np.float32) # error stored is 1/pt's TODO: Fix to properly use uncertainties on Pt instead of 1/Pt
+    df['RelPtDiff'] = (df['DeltaPt'] / (df['PtMFT'] + df['PtMCH'])).astype(np.float32) # relative pt difference
+    df['PullPt'] = (df['DeltaPt'] / np.sqrt(df['C1Pt1PtMCH']/df['InvQPtMCH']**4 + df['C1Pt1PtMFT']/df['InvQPtMFT']**4)).astype(np.float32)
+    # TODO: formula seems appropriate, but the plot for the pull is non-gaussian
 
     mch_cols = ["XMCH", "YMCH", "PhiMCH", "TanlMCH", "InvQPtMCH"]
     group_keys = df[mch_cols].round(6)
@@ -219,43 +223,60 @@ def add_dummy_candidates(df, FEATURES, group_col="mchID",
     return df_out
 
 def perform_cuts(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Apply the MFT preselection cuts with minimal temporary allocation.
 
-    # Eta cuts TODO: confirm we do not pick up any illegal eta entries
-    # eta_mch = np.arcsinh(pd.to_numeric(df["TanlMCH"], errors="raise"))
-    # eta_mft = np.arcsinh(pd.to_numeric(df["TanlMFT"], errors = "raise"))
-    # # Previously -2.45., adapted to reflect datamaker's limits for both MCH and MFT tracks
-    # eta_mask = (eta_mch > -3.6) & (eta_mch < -2.5) & (eta_mft > -3.6) & (eta_mft < -2.5)
-    # removed = df[~eta_mask].copy()
-    # r_rows = int(removed.shape[0])
-    # r_sig  = int(pd.to_numeric(removed.get("IsSignal", 0), errors="raise").sum())
-    # r_bkg  = r_rows - r_sig
-    # print("[Eta window] -4.0 < eta_MCH < -2.5 AND -3.6 < eta_MFT < -2.5")
-    # print(f"Removed rows: {r_rows}  signal={r_sig}  background={r_bkg}")
-    # df = df[eta_mask].reset_index(drop=True)
-    
-    # TODO: Repeat for other garbage values spotted
+    The implementation works directly on NumPy views of the relevant columns,
+    avoids materialising intermediate DataFrames for the removed rows,
+    and performs the final row filtering only once.
+    """
 
-    # Drop garbage MFT entries TODO
-    # mft_mask = (df['Chi2MFT'] < 1000)
-    # removed = df[~mft_mask].copy()
-    # r_rows = int(removed.shape[0])
-    # r_sig  = int(pd.to_numeric(removed.get("IsSignal", 0), errors="coerce").sum())
-    # r_bkg  = r_rows - r_sig
-    # print(f"Removed rows with above 1000 MFT chi2: {r_rows}  signal={r_sig}  background={r_bkg}")
-    # df = df[mft_mask].reset_index(drop=True)
+    # Use NumPy views for the hot columns; this avoids repeated pandas object
+    # dispatch overhead on a very large dataframe.
+    signal_values = df["IsSignal"].to_numpy(dtype=np.int8, copy=False)
+    eta_vals = df["etaMFT"].to_numpy(dtype=np.float32, copy=False)
+    chi2_vals = df["Chi2MFT"].to_numpy(dtype=np.float32, copy=False)
+    cxx_vals = df["CXXMFT"].to_numpy(dtype=np.float32, copy=False)
+    cyy_vals = df["CYYMFT"].to_numpy(dtype=np.float32, copy=False)
+    cphi_vals = df["CPhiPhiMFT"].to_numpy(dtype=np.float32, copy=False)
+    ctgl_vals = df["CTglTglMFT"].to_numpy(dtype=np.float32, copy=False)
+    c1pt_vals = df["C1Pt1PtMFT"].to_numpy(dtype=np.float32, copy=False)
 
-    # drop rows with negative MFT variances (GARBAGE) TODO: Confirm with Andrea how we should approach this?
-    var_mask = (df['CXXMFT'] > 0) & (df['CYYMFT'] > 0) & (df['CPhiPhiMFT'] > 0) & (df['CTglTglMFT'] > 0) & (df['C1Pt1PtMFT'] > 0)
-    removed_rows = int((~var_mask).sum())
-    r_sig = int(pd.to_numeric(df.loc[~var_mask, "IsSignal"], errors="coerce").sum())
-    r_bkg = removed_rows - r_sig
-    print(f"Removed rows with non-positive MFT variances: {removed_rows}  signal={r_sig}  background={r_bkg}")
-    df = df.loc[var_mask].reset_index(drop=True)
+    # --- 1) Loose eta window ---
+    eta_mask = (eta_vals >= -3.7) & (eta_vals <= -2.4)
+    removed_eta_rows = int((~eta_mask).sum())
+    removed_eta_sig = int(signal_values[~eta_mask].sum())
+    removed_eta_bkg = removed_eta_rows - removed_eta_sig
+    print("[Loose Eta window] -3.7 < eta_MFT < -2.4")
+    print(
+        f"Removed rows: {removed_eta_rows}  signal={removed_eta_sig}  background={removed_eta_bkg}"
+    )
 
-    # wrap mft phi to [-pi, pi] --- right way to go about it, the outside of -pi->pi values are for the MFT tracks that take a helical path
-    df['PhiMFT'] = np.arctan2(np.sin(df['PhiMFT']), np.cos(df['PhiMFT']))
+    # --- 2) Garbage MFT chi2 entries ---
+    mft_mask = chi2_vals < 1000.0
+    eta_mft_mask = eta_mask & mft_mask
+    removed_mft_rows = int((eta_mask & ~mft_mask).sum())
+    removed_mft_sig = int(signal_values[eta_mask & ~mft_mask].sum())
+    removed_mft_bkg = removed_mft_rows - removed_mft_sig
+    print(f"Removed rows with above 1000 MFT chi2: {removed_mft_rows}  signal={removed_mft_sig}  background={removed_mft_bkg}")
 
-    return df
+    # --- 3) Non-positive MFT variances ---
+    var_mask = (
+        (cxx_vals > 0)
+        & (cyy_vals > 0)
+        & (cphi_vals > 0)
+        & (ctgl_vals > 0)
+        & (c1pt_vals > 0)
+    )
+    final_mask = eta_mft_mask & var_mask
+    removed_var_rows = int((eta_mft_mask & ~var_mask).sum())
+    removed_var_sig = int(signal_values[eta_mft_mask & ~var_mask].sum())
+    removed_var_bkg = removed_var_rows - removed_var_sig
+    print(
+        f"Removed rows with non-positive MFT variances: {removed_var_rows}  signal={removed_var_sig}  background={removed_var_bkg}"
+    )
+
+    return df.loc[final_mask].reset_index(drop=True)
 
 def add_null_rows_for_non_pairable(df: pd.DataFrame) -> pd.DataFrame:
     # Identify pairable mchIDs
@@ -285,24 +306,30 @@ def inhousemetrics(
     idx = df.groupby("mchID")[metric].idxmax()
     best = df.loc[idx].set_index("mchID")
 
-    # TODO: Revise the dummy candidates configuration
+    # Terminated Dummies for now
     # TODO: revise pairable definition - this still includes wrongs in pairable
+    # Optionally we can add a configurable on if we should allows us to tweak if we include missing matches in pairable or not.
+    # This is considered an irreducible errorr
+    # In the realm of ~1-5% for OO vs PbPb
+    # Need to decide on this at some point, depends on if we want to asess the model's maximal achievable performance or the performance on real data....
     pairable = (
         df["MatchLabel"].isin(MATCH_LABEL_GROUPS["True"] + MATCH_LABEL_GROUPS["Wrong"])
-        & (df["is_dummy"] == 0) # Ensures that dummies are not included in our definition of pairable... but we do include missing?... metrics are due for a revision
+        # & (df["is_dummy"] == 0) # Ensures that dummies are not included in our definition of pairable... but we do include missing?... metrics are due for a revision
     ).groupby(df["mchID"]).any() 
 
     FakeNMissing = ~(
-        ((df["IsSignal"] == 1) & (df["is_dummy"] == 0))
+        ((df["IsSignal"] == 1)
+        #  & (df["is_dummy"] == 0)
+         )
         .groupby(df["mchID"])
         .any()
     )
 
-    is_reconstructed = (best[metric] > threshold) & (best["is_dummy"] == 0)
+    is_reconstructed = (best[metric] > threshold) #& (best["is_dummy"] == 0)
     # --- true match correctly reconstructed ---
     is_true = best["IsSignal"] == 1 # a bit debatable since this includes the dummy candidates
     is_true_reconstructed = is_reconstructed & is_true
-    is_rejected = (best[metric] <= threshold) | (best["is_dummy"] == 1)
+    is_rejected = (best[metric] <= threshold) #| (best["is_dummy"] == 1)
 
     N_total = len(best)
     N_pairable = pairable.sum()

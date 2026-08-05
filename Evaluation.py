@@ -6,6 +6,7 @@ from sklearn.calibration import calibration_curve
 from sklearn.model_selection import GroupShuffleSplit
 import seaborn as sns
 from sklearn.metrics import classification_report, confusion_matrix, accuracy_score, auc, precision_recall_curve
+import onnxruntime as ort
 
 
 
@@ -150,3 +151,22 @@ def pr(y_pred, y_true):
              bbox=dict(facecolor='white', edgecolor='black', boxstyle='round,pad=0.3'))
     plt.show()
     print(f"Area under Precision-Recall Curve (AUC-PR): {auc_pr:.4f}")
+
+def onnxinferxgb(df, features, model, targetname):
+    sess = ort.InferenceSession(model)
+    input_name = sess.get_inputs()[0].name
+    df[targetname] = sess.run(
+        None,
+        {input_name: df[features].to_numpy(dtype=np.float32)}
+    )[0]
+    return df
+
+def onnxinferlgbm(df, features, model, targetname):
+    sess = ort.InferenceSession(model)
+    input_name = sess.get_inputs()[0].name
+    pred = sess.run(
+        None,
+        {input_name: df[features].to_numpy(dtype=np.float32)}
+    )
+    df[targetname] = [p[1] for p in pred[1]]
+    return df
