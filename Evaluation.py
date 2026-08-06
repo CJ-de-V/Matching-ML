@@ -170,3 +170,100 @@ def onnxinferlgbm(df, features, model, targetname):
     )
     df[targetname] = [p[1] for p in pred[1]]
     return df
+
+
+def plotleadingmatch(df, metrics, **kwargs):
+    for metric in metrics:
+            Utils.draw_feature(feature=metric, match_groups=Utils.build_match_groups(df.loc[df.groupby("mchID")[metric].idxmax()].reset_index(drop=True)), **kwargs)
+
+def featuredecompositionplot(
+    df,
+    featureplot,
+    featurebreakdown,
+    equalwidth,
+    n_bins=5,
+    nbins=30,
+    density=True,
+    colours=None,
+    title=None,
+    log=True,
+    ax=None,
+    hist_kwargs=None,
+):
+    """Plots `featureplot` distribution broken down by bins of `featurebreakdown`.
+
+    Uses Matplotlib `ax.hist` per bin so legend entries show counts and labels correctly.
+    Args:
+        df: DataFrame
+        featureplot: column to histogram
+        featurebreakdown: column to bin for breakdown
+        equalwidth: if True use quantile-based binning (qcut), else equal-width (`cut`)
+        n_bins: number of breakdown bins
+        nbins: histogram bins for `ax.hist`
+        density: pass to `ax.hist`
+        colours: dict mapping bin -> color or None to use palette
+        title: plot title
+        log_x: if True set x-axis to log scale
+        ax: Matplotlib axis (created if None)
+        hist_kwargs: additional kwargs forwarded to `ax.hist`
+    """
+
+    df = df.copy()
+
+    bins_col = f"{featurebreakdown}_bin"
+    if equalwidth:
+        df[bins_col] = pd.qcut(df[featurebreakdown], q=n_bins, duplicates="drop")
+    else:
+        df[bins_col] = pd.cut(df[featurebreakdown], bins=n_bins)
+
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(10, 6))
+
+    # Determine categories in a stable order
+    if pd.api.types.is_categorical_dtype(df[bins_col]):
+        categories = list(df[bins_col].cat.categories)
+    else:
+        categories = sorted(df[bins_col].dropna().unique())
+
+    palette = sns.color_palette(n_colors=max(3, len(categories)))
+    hist_kwargs = hist_kwargs or {}
+
+    # range across full data for consistent binning
+    data_series = df[featureplot].dropna()
+    if data_series.empty:
+        raise ValueError(f"No data for feature '{featureplot}' to plot")
+    data_min, data_max = data_series.min(), data_series.max()
+
+    for i, cat in enumerate(categories):
+        group = df[df[bins_col] == cat][featureplot].dropna()
+        if len(group) == 0:
+            continue
+        color = None
+        if isinstance(colours, dict):
+            color = colours.get(cat, None)
+        if color is None:
+            color = palette[i % len(palette)]
+
+        ax.hist(
+            group,
+            bins=nbins,
+            range=(data_min, data_max),
+            histtype="step",
+            linewidth=2,
+            alpha=0.8,
+            density=density,
+            color=color,
+            label=f"{cat}  (n={len(group):,})",
+            **hist_kwargs,
+        )
+
+    ax.set_ylabel("Density" if density else "Counts", fontsize=12)
+    ax.set_xlabel(featureplot, fontsize=12)
+    ax.set_title(title or f"{featureplot} by {featurebreakdown}", fontsize=14)
+    ax.tick_params(axis="both", labelsize=10)
+    ax.legend(fontsize=10, loc="best", frameon=False, title=f"{featurebreakdown} bins")
+    if log:
+        ax.set_yscale("log")
+    ax.grid(True, which="both", ls="--", lw=0.5)
+    plt.tight_layout()
+    plt.show()

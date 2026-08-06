@@ -7,6 +7,9 @@ from plotly.subplots import make_subplots
 from hipe4ml.tree_handler import TreeHandler
 from typing import Optional, Union
 
+plt.rcParams['axes.grid'] = True
+plt.rcParams['grid.color'] = 'gray'
+plt.rcParams['grid.alpha'] = 0.5
 
 #TODO: Add some metric of total uncertainty... like something derived of the whole covariance matrix...that's dangerously close to CHI2 again.
 DESIGNED_FEATURES = [
@@ -538,84 +541,24 @@ def plot_metrics_vs_xy(
         Opacity of the surface plot.
     """
 
-    df = df.copy()
-
-    if trim_low > 0 or trim_high > 0:
-        x_low_q = df[feature_x].quantile(trim_low)
-        x_high_q = df[feature_x].quantile(1 - trim_high)
-        y_low_q = df[feature_y].quantile(trim_low)
-        y_high_q = df[feature_y].quantile(1 - trim_high)
-        df = df[
-            (df[feature_x] >= x_low_q)
-            & (df[feature_x] <= x_high_q)
-            & (df[feature_y] >= y_low_q)
-            & (df[feature_y] <= y_high_q)
-        ]
-
-    if fmin_x is None:
-        fmin_x = df[feature_x].min()
-    if fmax_x is None:
-        fmax_x = df[feature_x].max()
-    if fmin_y is None:
-        fmin_y = df[feature_y].min()
-    if fmax_y is None:
-        fmax_y = df[feature_y].max()
-
-    def _bin_edges(name, bins, vmin, vmax):
-        if isinstance(bins, (np.ndarray, list)):
-            return np.asarray(bins, dtype=float)
-        if isinstance(bins, int):
-            return np.linspace(vmin, vmax, bins + 1)
-        raise ValueError(f"{name} must be int or array-like")
-
-    x_edges = _bin_edges("x_bins", x_bins, fmin_x, fmax_x)
-    y_edges = _bin_edges("y_bins", y_bins, fmin_y, fmax_y)
-
-    all_results = []
-
-    for ix in range(len(x_edges) - 1):
-        x_low, x_high = x_edges[ix], x_edges[ix + 1]
-        x_center = 0.5 * (x_low + x_high)
-
-        for iy in range(len(y_edges) - 1):
-            y_low, y_high = y_edges[iy], y_edges[iy + 1]
-            y_center = 0.5 * (y_low + y_high)
-
-            if ix == len(x_edges) - 2:
-                mask_x = (df[feature_x] >= x_low) & (df[feature_x] <= x_high)
-            else:
-                mask_x = (df[feature_x] >= x_low) & (df[feature_x] < x_high)
-
-            if iy == len(y_edges) - 2:
-                mask_y = (df[feature_y] >= y_low) & (df[feature_y] <= y_high)
-            else:
-                mask_y = (df[feature_y] >= y_low) & (df[feature_y] < y_high)
-
-            df_bin = df[mask_x & mask_y]
-            if len(df_bin) == 0:
-                continue
-
-            df_metrics = metrics_fn(
-                df_bin,
-                threshold=threshold,
-                metric=metric_col_prefix,
-                Nsigma=Nsigma,
-            )
-
-            df_metrics = df_metrics.copy()
-            df_metrics["bin_low_x"] = x_low
-            df_metrics["bin_high_x"] = x_high
-            df_metrics["bin_center_x"] = x_center
-            df_metrics["bin_low_y"] = y_low
-            df_metrics["bin_high_y"] = y_high
-            df_metrics["bin_center_y"] = y_center
-            df_metrics["entries"] = len(df_bin)
-            all_results.append(df_metrics)
-
-    if len(all_results) == 0:
-        raise ValueError("No data available in the requested x/y binning range.")
-
-    result_df = pd.concat(all_results, ignore_index=True)
+    # Delegate data preparation to generator for reuse by diff plotting
+    result_df, x_edges, y_edges = generate_metrics_vs_xy_df(
+        df.copy(),
+        feature_x=feature_x,
+        feature_y=feature_y,
+        threshold=threshold,
+        metrics_fn=metrics_fn,
+        metric_col_prefix=metric_col_prefix,
+        x_bins=x_bins,
+        y_bins=y_bins,
+        fmin_x=fmin_x,
+        fmax_x=fmax_x,
+        fmin_y=fmin_y,
+        fmax_y=fmax_y,
+        trim_low=trim_low,
+        trim_high=trim_high,
+        Nsigma=Nsigma,
+    )
 
     metrics = result_df["metric"].unique()
     n_metrics = len(metrics)
@@ -719,6 +662,326 @@ def plot_metrics_vs_xy(
     fig.show()
 
     return result_df
+
+
+def generate_metrics_vs_xy_df(
+    df: pd.DataFrame,
+    feature_x: str,
+    feature_y: str,
+    threshold: float,
+    metrics_fn,
+    metric_col_prefix: str = "score",
+    x_bins: Optional[Union[int, np.ndarray]] = 10,
+    y_bins: Optional[Union[int, np.ndarray]] = 10,
+    fmin_x: Optional[float] = None,
+    fmax_x: Optional[float] = None,
+    fmin_y: Optional[float] = None,
+    fmax_y: Optional[float] = None,
+    trim_low: float = 0.0,
+    trim_high: float = 0.0,
+    Nsigma: float = 3.0,
+):
+    """Generate a DataFrame of metrics computed on a 2D grid over (feature_x, feature_y).
+
+    Returns (result_df, x_edges, y_edges).
+    """
+    df = df.copy()
+
+    if trim_low > 0 or trim_high > 0:
+        x_low_q = df[feature_x].quantile(trim_low)
+        x_high_q = df[feature_x].quantile(1 - trim_high)
+        y_low_q = df[feature_y].quantile(trim_low)
+        y_high_q = df[feature_y].quantile(1 - trim_high)
+        df = df[
+            (df[feature_x] >= x_low_q)
+            & (df[feature_x] <= x_high_q)
+            & (df[feature_y] >= y_low_q)
+            & (df[feature_y] <= y_high_q)
+        ]
+
+    if fmin_x is None:
+        fmin_x = df[feature_x].min()
+    if fmax_x is None:
+        fmax_x = df[feature_x].max()
+    if fmin_y is None:
+        fmin_y = df[feature_y].min()
+    if fmax_y is None:
+        fmax_y = df[feature_y].max()
+
+    def _bin_edges(name, bins, vmin, vmax):
+        if isinstance(bins, (np.ndarray, list)):
+            return np.asarray(bins, dtype=float)
+        if isinstance(bins, int):
+            return np.linspace(vmin, vmax, bins + 1)
+        raise ValueError(f"{name} must be int or array-like")
+
+    x_edges = _bin_edges("x_bins", x_bins, fmin_x, fmax_x)
+    y_edges = _bin_edges("y_bins", y_bins, fmin_y, fmax_y)
+
+    all_results = []
+
+    for ix in range(len(x_edges) - 1):
+        x_low, x_high = x_edges[ix], x_edges[ix + 1]
+        x_center = 0.5 * (x_low + x_high)
+
+        for iy in range(len(y_edges) - 1):
+            y_low, y_high = y_edges[iy], y_edges[iy + 1]
+            y_center = 0.5 * (y_low + y_high)
+
+            if ix == len(x_edges) - 2:
+                mask_x = (df[feature_x] >= x_low) & (df[feature_x] <= x_high)
+            else:
+                mask_x = (df[feature_x] >= x_low) & (df[feature_x] < x_high)
+
+            if iy == len(y_edges) - 2:
+                mask_y = (df[feature_y] >= y_low) & (df[feature_y] <= y_high)
+            else:
+                mask_y = (df[feature_y] >= y_low) & (df[feature_y] < y_high)
+
+            df_bin = df[mask_x & mask_y]
+            if len(df_bin) == 0:
+                continue
+
+            df_metrics = metrics_fn(
+                df_bin,
+                threshold=threshold,
+                metric=metric_col_prefix,
+                Nsigma=Nsigma,
+            )
+
+            df_metrics = df_metrics.copy()
+            df_metrics["bin_low_x"] = x_low
+            df_metrics["bin_high_x"] = x_high
+            df_metrics["bin_center_x"] = x_center
+            df_metrics["bin_low_y"] = y_low
+            df_metrics["bin_high_y"] = y_high
+            df_metrics["bin_center_y"] = y_center
+            df_metrics["entries"] = len(df_bin)
+            all_results.append(df_metrics)
+
+    if len(all_results) == 0:
+        raise ValueError("No data available in the requested x/y binning range.")
+
+    result_df = pd.concat(all_results, ignore_index=True)
+
+    return result_df, x_edges, y_edges
+
+
+def plot_metrics_vs_xy_diff(
+    # Shared settings
+    feature_x: str,
+    feature_y: str,
+    x_bins: Optional[Union[int, np.ndarray]] = 10,
+    y_bins: Optional[Union[int, np.ndarray]] = 10,
+    fmin_x: Optional[float] = None,
+    fmax_x: Optional[float] = None,
+    fmin_y: Optional[float] = None,
+    fmax_y: Optional[float] = None,
+    trim_low: float = 0.0,
+    trim_high: float = 0.0,
+    Nsigma: float = 3.0,
+    metrics_fn=None,
+    # Per-run settings
+    df_a: pd.DataFrame = None,
+    threshold_a: float = 0.5,
+    metric_col_prefix_a: str = "score",
+    df_b: pd.DataFrame = None,
+    threshold_b: float = 0.5,
+    metric_col_prefix_b: str = "score",
+    # Plotting
+    cmap: str = "RdBu",
+    relative: bool = False,
+    min_entries: int = 1,
+):
+    """Compute metrics for two runs (A,B) and plot B - A on diverging heatmaps.
+
+    Shared parameters (binning, ranges, trimming, Nsigma, metrics_fn) apply
+    to both runs. Per-run parameters are the input dataframe, threshold and
+    metric column prefix.
+    """
+    if metrics_fn is None:
+        raise ValueError("metrics_fn must be provided")
+
+    # Generate results for both runs with the same binning/ranges
+    res_a, x_edges, y_edges = generate_metrics_vs_xy_df(
+        df_a,
+        feature_x=feature_x,
+        feature_y=feature_y,
+        threshold=threshold_a,
+        metrics_fn=metrics_fn,
+        metric_col_prefix=metric_col_prefix_a,
+        x_bins=x_bins,
+        y_bins=y_bins,
+        fmin_x=fmin_x,
+        fmax_x=fmax_x,
+        fmin_y=fmin_y,
+        fmax_y=fmax_y,
+        trim_low=trim_low,
+        trim_high=trim_high,
+        Nsigma=Nsigma,
+    )
+
+    res_b, _, _ = generate_metrics_vs_xy_df(
+        df_b,
+        feature_x=feature_x,
+        feature_y=feature_y,
+        threshold=threshold_b,
+        metrics_fn=metrics_fn,
+        metric_col_prefix=metric_col_prefix_b,
+        x_bins=x_bins,
+        y_bins=y_bins,
+        fmin_x=fmin_x,
+        fmax_x=fmax_x,
+        fmin_y=fmin_y,
+        fmax_y=fmax_y,
+        trim_low=trim_low,
+        trim_high=trim_high,
+        Nsigma=Nsigma,
+    )
+
+    metrics = sorted(set(res_a["metric"].unique()).union(res_b["metric"].unique()))
+    if not metrics:
+        raise ValueError("No metrics found in either run")
+
+    n_metrics = len(metrics)
+    ncols = min(2, n_metrics)
+    nrows = int(np.ceil(n_metrics / ncols))
+
+    fig = make_subplots(
+        rows=nrows,
+        cols=ncols,
+        subplot_titles=list(metrics),
+        horizontal_spacing=0.12,
+        vertical_spacing=0.12,
+        specs=[[{"type": "xy"} for _ in range(ncols)] for _ in range(nrows)],
+    )
+
+    first_colorbar = True
+
+    for metric_idx, metric in enumerate(metrics):
+        row = metric_idx // ncols + 1
+        col = metric_idx % ncols + 1
+
+        sub_a = res_a[res_a["metric"] == metric]
+        sub_b = res_b[res_b["metric"] == metric]
+
+        x_centers = np.sort(np.unique(np.concatenate([
+            sub_a["bin_center_x"].unique(), sub_b["bin_center_x"].unique()
+        ])))
+        y_centers = np.sort(np.unique(np.concatenate([
+            sub_a["bin_center_y"].unique(), sub_b["bin_center_y"].unique()
+        ])))
+
+        # If neither run produced any bins for this metric, skip it
+        if x_centers.size == 0 or y_centers.size == 0:
+            print(f"[WARN] {metric}: no populated bins for either run → skipped")
+            continue
+
+        def _pivot_to_array(df_sub, valcol):
+            if df_sub.empty:
+                return np.full((len(y_centers), len(x_centers)), np.nan)
+            arr = (
+                df_sub.pivot(index="bin_center_y", columns="bin_center_x", values=valcol)
+                .reindex(index=y_centers, columns=x_centers)
+                .to_numpy()
+            )
+            return arr
+
+        Z_a = _pivot_to_array(sub_a, "value")
+        Z_b = _pivot_to_array(sub_b, "value")
+
+        err_a = _pivot_to_array(sub_a, "uncertainty")
+        err_b = _pivot_to_array(sub_b, "uncertainty")
+
+        num_a = _pivot_to_array(sub_a, "num")
+        den_a = _pivot_to_array(sub_a, "den")
+        ent_a = _pivot_to_array(sub_a, "entries")
+
+        num_b = _pivot_to_array(sub_b, "num")
+        den_b = _pivot_to_array(sub_b, "den")
+        ent_b = _pivot_to_array(sub_b, "entries")
+
+        # Compute difference
+        with np.errstate(invalid="ignore", divide="ignore"):
+            if relative:
+                Z_diff = (Z_b - Z_a) / Z_a
+            else:
+                Z_diff = Z_b - Z_a
+
+        # Propagate uncertainties (assume independent)
+        unc_diff = np.sqrt(np.nan_to_num(err_a) ** 2 + np.nan_to_num(err_b) ** 2)
+
+        # Mask low-statistics cells
+        mask_low = (np.nan_to_num(ent_a) < min_entries) & (np.nan_to_num(ent_b) < min_entries)
+        Z_diff = np.where(mask_low, np.nan, Z_diff)
+
+        # If the difference is entirely NaN, skip plotting this metric
+        if np.all(np.isnan(Z_diff)):
+            print(f"[WARN] {metric}: difference map is all NaN → skipped")
+            continue
+
+        # color scale symmetric about zero; avoid all-zeros causing degenerate scale
+        vmax = np.nanmax(np.abs(Z_diff))
+        if np.isnan(vmax) or vmax == 0:
+            # fallback tiny scale
+            vmax = 1e-8
+        vmin = -vmax
+
+        customdata = np.stack([
+            den_a, num_a, ent_a,
+            den_b, num_b, ent_b,
+            unc_diff,
+        ], axis=-1)
+
+        colorbar = dict(title="Diff", len=0.8, yanchor="middle", y=0.5, x=1.02)
+        if not first_colorbar:
+            colorbar = None
+
+        heatmap_kwargs = {
+            "x": x_centers,
+            "y": y_centers,
+            "z": Z_diff,
+            "colorscale": cmap,
+            "zmin": vmin,
+            "zmax": vmax,
+            "zsmooth": "best",
+            "customdata": customdata,
+            "hovertemplate": (
+                f"{feature_x}: %{{x:.3f}}<br>"
+                f"{feature_y}: %{{y:.3f}}<br>"
+                "Diff: %{z:.3f}<br>"
+                "A_Num: %{customdata[1]}  A_Den: %{customdata[0]}  A_Entries: %{customdata[2]}<br>"
+                "B_Num: %{customdata[4]}  B_Den: %{customdata[3]}  B_Entries: %{customdata[5]}<br>"
+                "PropUnc: %{customdata[6]:.3f}<extra>" + metric + "</extra>"
+            ),
+            "showscale": first_colorbar,
+            "showlegend": False,
+        }
+        if colorbar is not None:
+            heatmap_kwargs["colorbar"] = colorbar
+
+        fig.add_trace(
+            go.Heatmap(**heatmap_kwargs),
+            row=row,
+            col=col,
+        )
+
+        fig.update_xaxes(title_text=feature_x, row=row, col=col)
+        fig.update_yaxes(title_text=feature_y, row=row, col=col)
+
+        first_colorbar = False
+
+    fig.update_layout(
+        title_text=f"Metrics diff (B - A) vs {feature_x} and {feature_y}",
+        template="plotly_white",
+        height=450 * nrows,
+        width=700 * ncols,
+        showlegend=False,
+    )
+
+    fig.show()
+
+    return fig
 
 
 def build_match_groups(
