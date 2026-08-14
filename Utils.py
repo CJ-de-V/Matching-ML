@@ -138,7 +138,7 @@ def design_features(df: pd.DataFrame) -> pd.DataFrame:
 
     df['DCAXY'] = np.sqrt(df['DCAX']**2 + df['DCAY']**2).astype(np.float32)
 
-    # df["is_dummy"] = 0 # terminated for now
+    df["is_dummy"] = 0 # terminated for now
 
     df['DeltaX'] = (df['XMCH'] - df['XMFT']).astype(np.float32)
     df['DeltaY'] = (df['YMCH'] - df['YMFT']).astype(np.float32)
@@ -326,25 +326,31 @@ def inhousemetrics(
     # This is considered an irreducible errorr
     # In the realm of ~1-5% for OO vs PbPb
     # Need to decide on this at some point, depends on if we want to asess the model's maximal achievable performance or the performance on real data....
+    #  TODO/NOTE temporarily removed missing matches  - missing matches are now - in my opinion - correctly classified as non-pairable
+            # & (df["is_dummy"] == 0) # Ensures that dummies are not included in our definition of pairable... but we do include missing?... metrics are due for a revision
     pairable = (
-        df["MatchLabel"].isin(MATCH_LABEL_GROUPS["True"])
-        #  TODO/NOTE temporarily removed missing matches + MATCH_LABEL_GROUPS["Wrong"] - missing matches are now - in my opinion - correctly classified as non-pairable
-        # & (df["is_dummy"] == 0) # Ensures that dummies are not included in our definition of pairable... but we do include missing?... metrics are due for a revision
+        df["MatchLabel"].isin(MATCH_LABEL_GROUPS["True"]+ MATCH_LABEL_GROUPS["Wrong"]) & (df["is_dummy"] == 0)
     ).groupby(df["mchID"]).any() 
 
     FakeNMissing = ~(
         ((df["IsSignal"] == 1)
-        #  & (df["is_dummy"] == 0)
+         & (df["is_dummy"] == 0)
          )
         .groupby(df["mchID"])
         .any()
     )
 
-    is_reconstructed = (best[metric] > threshold) #& (best["is_dummy"] == 0)
+    Missing = (
+        df["MatchLabel"].isin(MATCH_LABEL_GROUPS["Wrong"])
+        .groupby(df["mchID"])
+        .all()
+        )
+
+    is_reconstructed = (best[metric] > threshold) & (best["is_dummy"] == 0)
     # --- true match correctly reconstructed ---
     is_true = best["IsSignal"] == 1 # a bit debatable since this includes the dummy candidates
     is_true_reconstructed = is_reconstructed & is_true
-    is_rejected = (best[metric] <= threshold) #| (best["is_dummy"] == 1)
+    is_rejected = (best[metric] <= threshold) | (best["is_dummy"] == 1) #| (best["is_dummy"] == 1)
 
     N_total = len(best)
     N_pairable = pairable.sum()
@@ -352,7 +358,7 @@ def inhousemetrics(
     N_FakeNMissing = FakeNMissing.sum()
     N_gm_rec = is_reconstructed.sum()
     N_gm_true = is_true_reconstructed.sum()
-
+    N_missing=Missing.sum()
 
     N_gm_rec_pairable = (is_reconstructed & pairable).sum()
     N_rejected_FakeNMissing = (is_rejected & FakeNMissing).sum()
@@ -361,10 +367,11 @@ def inhousemetrics(
     # --- Define metrics as (num, den) ---
     metrics = {
         "Purity": (N_gm_true, N_gm_rec),
-        "Rec pairing efficiency": (N_gm_rec_pairable, N_pairable),
+        # "Rec pairing efficiency": (N_gm_rec_pairable, N_pairable),
         "True pairing efficiency": (N_gm_true, N_pairable),
-        "Wrong pairing fraction": (N_gm_rec_pairable - N_gm_true, N_pairable),
-        "Rejection efficiency": (N_rejected_FakeNMissing, N_FakeNMissing),
+        # "Wrong pairing fraction": (N_gm_rec_pairable - N_gm_true, N_pairable),
+        # "Rejection efficiency": (N_rejected_FakeNMissing, N_FakeNMissing),
+        "Missing fraction":(N_missing,N_pairable),
     }
 
     rows = []
@@ -375,7 +382,7 @@ def inhousemetrics(
             val = num / den
             err = Nsigma * np.sqrt(val * (1 - val) / den)
         else:
-            val, err = np.nan, np.nan
+            val, err = 1.0, 0.0 # Numerator is always a subset of Denominator, so this is the 0/0 case
 
         rows.append({
             "metric": name,
@@ -506,6 +513,7 @@ def plot_metrics_vs_xy(
     Nsigma: float = 3.0,
     cmap: str = "viridis",
     surface_alpha: float = 0.9,
+    min_entries: int = 600,
 ):
     """Plot inhouse metrics as a function of two features.
 
@@ -539,6 +547,8 @@ def plot_metrics_vs_xy(
         Matplotlib colormap for the surface.
     surface_alpha : float
         Opacity of the surface plot.
+    min_entries : int
+        Minimum number of entries required in a bin to be included in the plot.
     """
 
     # Delegate data preparation to generator for reuse by diff plotting
@@ -610,6 +620,10 @@ def plot_metrics_vs_xy(
             columns="bin_center_x",
             values="entries",
         ).reindex(index=y_centers, columns=x_centers).to_numpy()
+
+        # Mask low-statistics cells
+        mask_low = (np.nan_to_num(entries) < min_entries)
+        Z = np.where(mask_low, np.nan, Z) 
 
         customdata = np.stack([den, num, entries], axis=-1)
 
@@ -791,9 +805,11 @@ def plot_metrics_vs_xy_diff(
     # Plotting
     cmap: str = "RdBu",
     relative: bool = False,
-    min_entries: int = 1,
+    min_entries: int = 600,
+    vmin = -1.0,
+    vmax = 1.0
 ):
-    """Compute metrics for two runs (A,B) and plot B - A on diverging heatmaps.
+    """Compute metrics for two score metrics (A,B) and plot B - A on diverging heatmaps.
 
     Shared parameters (binning, ranges, trimming, Nsigma, metrics_fn) apply
     to both runs. Per-run parameters are the input dataframe, threshold and
@@ -874,7 +890,7 @@ def plot_metrics_vs_xy_diff(
 
         # If neither run produced any bins for this metric, skip it
         if x_centers.size == 0 or y_centers.size == 0:
-            print(f"[WARN] {metric}: no populated bins for either run → skipped")
+            print(f"[WARN] {metric}: no populated bins for either run -> skipped")
             continue
 
         def _pivot_to_array(df_sub, valcol):
@@ -917,15 +933,15 @@ def plot_metrics_vs_xy_diff(
 
         # If the difference is entirely NaN, skip plotting this metric
         if np.all(np.isnan(Z_diff)):
-            print(f"[WARN] {metric}: difference map is all NaN → skipped")
+            print(f"[WARN] {metric}: difference map is all NaN -> skipped")
             continue
 
-        # color scale symmetric about zero; avoid all-zeros causing degenerate scale
-        vmax = np.nanmax(np.abs(Z_diff))
-        if np.isnan(vmax) or vmax == 0:
-            # fallback tiny scale
-            vmax = 1e-8
-        vmin = -vmax
+        # # color scale symmetric about zero; avoid all-zeros causing degenerate scale
+        # vmax = np.nanmax(np.abs(Z_diff))
+        # if np.isnan(vmax) or vmax == 0:
+        #     # fallback tiny scale
+        #     vmax = 1e-8
+        # vmin = -vmax
 
         customdata = np.stack([
             den_a, num_a, ent_a,
@@ -972,14 +988,14 @@ def plot_metrics_vs_xy_diff(
         first_colorbar = False
 
     fig.update_layout(
-        title_text=f"Metrics diff (B - A) vs {feature_x} and {feature_y}",
+        title_text=f"Metrics diff ({metric_col_prefix_b} - {metric_col_prefix_a}) vs {feature_x} and {feature_y}",
         template="plotly_white",
         height=450 * nrows,
         width=700 * ncols,
         showlegend=False,
     )
 
-    fig.show()
+    # fig.show()
 
     return fig
 
@@ -1160,7 +1176,7 @@ def sweep_threshold_plot(
 
         df_metrics["threshold"] = t
         all_results.append(df_metrics)
-    print(f"Computed metrics are {all_results} thresholds.")
+    # print(f"Computed metrics are {all_results} thresholds.")
 
     result_df = pd.concat(all_results, ignore_index=True)
 
@@ -1170,7 +1186,7 @@ def sweep_threshold_plot(
     for metric, subdf in result_df.groupby("metric"):
 
         if subdf["value"].isna().all():
-            print(f"[WARN] {metric} is all NaN → skipped")
+            print(f"[WARN] {metric} is all NaN -> skipped")
             continue
 
         # Sort for clean lines
@@ -1201,4 +1217,98 @@ def sweep_threshold_plot(
     plt.tight_layout()
     plt.show()
 
-    return result_df
+    return #result_df
+
+
+def pairing_purity_curve(
+    df: pd.DataFrame,
+    metric: str = "score",
+    n_thresholds: int = 20,
+    titleappendix: str = "",
+):
+    """
+    Plot Purity vs True pairing efficiency curve (analogous to a precision-recall curve)
+    using the `inhousemetrics` function across many thresholds.
+
+    Returns
+    -------
+    (auc_val, points_df)
+        `auc_val` is the area under the curve (True pairing efficiency on x, Purity on y).
+        `points_df` is a DataFrame with columns `threshold`, `true_pairing_eff`, `purity`.
+    """
+    from sklearn.metrics import auc as _auc
+
+    vals = df[metric].dropna()
+    if vals.empty:
+        raise ValueError(f"No values found for metric '{metric}'")
+
+    vmin, vmax = vals.min(), vals.max()
+    if vmin == vmax:
+        thresholds = np.array([vmin])
+    else:
+        thresholds = np.linspace(vmin, vmax, n_thresholds)
+
+    x_list = []
+    y_list = []
+    thresh_list = []
+    missingfrac =-1
+    for t in thresholds:
+        res = inhousemetrics(df, threshold=float(t), metric=metric)
+        if res is None or len(res) == 0:
+            continue
+        try:
+            purity = float(res.loc[res["metric"] == "Purity", "value"].iloc[0])
+            true_eff = float(res.loc[res["metric"] == "True pairing efficiency", "value"].iloc[0])
+        except Exception:
+            # Missing metric rows; skip
+            continue
+        x_list.append(true_eff)
+        y_list.append(purity)
+        thresh_list.append(t)
+        missingfrac = float(res.loc[res["metric"] == "Missing fraction", "value"].iloc[0])
+
+    if len(x_list) == 0:
+        raise RuntimeError("No points computed for pairing/purity curve")
+
+    x = np.array(x_list)
+    y = np.array(y_list)
+    order = np.argsort(x)
+    x_s = x[order]
+    y_s = y[order]
+    thresh_s = np.array(thresh_list)[order]
+
+    MaxTrueRecEff = 1-missingfrac
+
+
+    auc_val = float(_auc(x_s, y_s)) / MaxTrueRecEff
+
+
+    plt.figure(figsize=(7, 5))
+    plt.plot(x_s, y_s, label="Model", color="blue", lw=2)
+    plt.fill_between(x_s, y_s, alpha=0.2, color="blue")
+    # Perfect model reference: purity == 1 (horizontal line)
+    plt.plot([0.0, MaxTrueRecEff, MaxTrueRecEff], [1.0, 1.0, 0.0], label="Ideal model", color="green", linestyle="--", lw=2)
+
+    plt.xlabel("True pairing efficiency")
+    plt.ylabel("Purity")
+    title = "Purity vs True pairing efficiency"
+    if titleappendix:
+        title = f"{title} - {titleappendix}"
+    plt.title(title)
+    plt.legend(loc="lower left")
+    plt.grid(True)
+    plt.text(
+        0.95,
+        0.05,
+        f"scaled AUC = {auc_val:.4f}",
+        ha="right",
+        va="bottom",
+        transform=plt.gca().transAxes,
+        bbox=dict(facecolor="white", edgecolor="black", boxstyle="round,pad=0.3"),
+    )
+    plt.ylim(0.0, 1.02)
+    plt.xlim(0.0, 1.0)
+    plt.show()
+
+    points_df = pd.DataFrame({"threshold": thresh_s, "true_pairing_eff": x_s, "purity": y_s})
+    return auc_val, points_df

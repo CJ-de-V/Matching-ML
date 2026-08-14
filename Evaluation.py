@@ -123,7 +123,7 @@ def cm(y_pred, y_true, normalize=None):
         print(f"  {label:<8} - Precision: {precision:.4f}, Recall: {recall:.4f}, F1: {f1:.4f}")
 
 
-def pr(y_pred, y_true):
+def pr(y_pred, y_true,titleappendix = ""):
 
     precision, recall, _ = precision_recall_curve(y_true=y_true, y_score=y_pred)
     auc_pr = auc(recall, precision)
@@ -144,7 +144,7 @@ def pr(y_pred, y_true):
 
     plt.xlabel('Recall')
     plt.ylabel('Precision')
-    plt.title('Precision-Recall Curve')
+    plt.title('Precision-Recall Curve - ' + titleappendix)
     plt.legend(loc='lower left')
     plt.grid(True)
     plt.text(0.95, 0.05, f'AUC-PR = {auc_pr:.4f}', ha='right', va='bottom', transform=plt.gca().transAxes,
@@ -267,3 +267,6 @@ def featuredecompositionplot(
     ax.grid(True, which="both", ls="--", lw=0.5)
     plt.tight_layout()
     plt.show()
+
+
+
