@@ -13,7 +13,7 @@ plt.rcParams['grid.alpha'] = 0.5
 
 #TODO: Add some metric of total uncertainty... like something derived of the whole covariance matrix...that's dangerously close to CHI2 again.
 DESIGNED_FEATURES = [
-    "mchID", "is_dummy", # Indexing and dummy flag
+    "mchID", #"is_dummy", # Indexing and dummy flag
     
     'DeltaX', 'DeltaY', 'DeltaPhi', 'DeltaTanl', 'DeltaR', # MFT-MCH feature residuals
     
@@ -69,11 +69,11 @@ SKIPPED_FEATURES  = [
 
 READ_FEATURES = [f for f in ALL_FEATURES if f not in SKIPPED_FEATURES]
 
-#NOTE: Once we run into issues with overlaps in MCHID we can consider using more features to define the group, for now this is sufficient
+#NOTE: Once we run into issues with overlaps in MCHID we can consider using more features to define the group, for now the smaller number of features we use is sufficient
 GROUP_PRESERVING_FEATURES = [
     'XMCH', 'YMCH', 'PhiMCH', 'TanlMCH', 'InvQPtMCH',# "chi2MCH",
     'Chi2MCH', 'PDCA', 'Rabs', 'CXXMCH', 'CYYMCH', 'CPhiPhiMCH', 'CTglTglMCH', 'C1Pt1PtMCH',
-    'MatchAttempts', 'MFTMult', 'PtMCH',
+    'MatchAttempts', 'MFTMult', 'PtMCH', 'DCAXY'
 ]
 
 MATCH_LABEL_GROUPS = {
@@ -112,7 +112,7 @@ def get_dataframe(file_path: str, folder_name: str ) -> pd.DataFrame:
 
 def process_dataframe(df: pd.DataFrame, makedummies: bool = False) -> pd.DataFrame:
 
-    # Added here to dodge errors hopefully:
+    # Cuts required to dodge negative sqrts
     df['PhiMFT'] = np.arctan2(np.sin(df['PhiMFT']), np.cos(df['PhiMFT']))
 
     df = design_features(df)
@@ -138,7 +138,7 @@ def design_features(df: pd.DataFrame) -> pd.DataFrame:
 
     df['DCAXY'] = np.sqrt(df['DCAX']**2 + df['DCAY']**2).astype(np.float32)
 
-    df["is_dummy"] = 0 # terminated for now
+    # df["is_dummy"] = 0 # terminated for now
 
     df['DeltaX'] = (df['XMCH'] - df['XMFT']).astype(np.float32)
     df['DeltaY'] = (df['YMCH'] - df['YMFT']).astype(np.float32)
@@ -163,7 +163,7 @@ def design_features(df: pd.DataFrame) -> pd.DataFrame:
     df['PMCH'] = (df['PtMCH'] * np.sqrt(1 + df['TanlMCH']**2)).astype(np.float32)
     df['PMFT'] = (df['PtMFT'] * np.sqrt(1 + df['TanlMFT']**2)).astype(np.float32)
     df['DeltaP'] = (df['PMCH'] - df['PMFT']).astype(np.float32)
-    df['RelPDiff'] = (df['DeltaP'] / (df['PMFT'] + df['PMCH'])).astype(np.float32) # relative p difference
+    df['RelPDiff'] = (df['DeltaP'] / (df['PMFT'] + df['PMCH'])).astype(np.float32)
 
     mch_cols = ["XMCH", "YMCH", "PhiMCH", "TanlMCH", "InvQPtMCH"]
     group_keys = df[mch_cols].round(6)
@@ -256,12 +256,12 @@ def perform_cuts(df: pd.DataFrame) -> pd.DataFrame:
     ctgl_vals = df["CTglTglMFT"].to_numpy(dtype=np.float32, copy=False)
     c1pt_vals = df["C1Pt1PtMFT"].to_numpy(dtype=np.float32, copy=False)
 
-    # --- 1) Loose eta window ---
-    eta_mask = (eta_vals >= -3.6) & (eta_vals <= -2.5)
+    # --- 1) Loose eta window --- made even looser to track if we're losing tracks in this region, ideally -3.6--2.5, currently expanded
+    eta_mask = (eta_vals >= -20) & (eta_vals <= 17)
     removed_eta_rows = int((~eta_mask).sum())
     removed_eta_sig = int(signal_values[~eta_mask].sum())
     removed_eta_bkg = removed_eta_rows - removed_eta_sig
-    print("[Loose Eta window] -3.6 < eta_MFT < -2.5")
+    print("[Loose Eta window] ___seenippet___")
     print(
         f"Removed rows: {removed_eta_rows}  signal={removed_eta_sig}  background={removed_eta_bkg}"
     )
@@ -290,7 +290,7 @@ def perform_cuts(df: pd.DataFrame) -> pd.DataFrame:
         f"Removed rows with non-positive MFT variances: {removed_var_rows}  signal={removed_var_sig}  background={removed_var_bkg}"
     )
 
-    return df.loc[final_mask] #.reset_index(drop=True) NOTE: disabled for memory reasons
+    return df.loc[final_mask]
 
 def add_null_rows_for_non_pairable(df: pd.DataFrame) -> pd.DataFrame:
     # Identify pairable mchIDs
@@ -321,20 +321,17 @@ def inhousemetrics(
     best = df.loc[idx].set_index("mchID")
 
     # Terminated Dummies for now
-    # TODO: revise pairable definition - this still includes wrongs in pairable
-    # Optionally we can add a configurable on if we should allows us to tweak if we include missing matches in pairable or not.
-    # This is considered an irreducible errorr
     # In the realm of ~1-5% for OO vs PbPb
     # Need to decide on this at some point, depends on if we want to asess the model's maximal achievable performance or the performance on real data....
-    #  TODO/NOTE temporarily removed missing matches  - missing matches are now - in my opinion - correctly classified as non-pairable
+    #  NOTE Missing matches are still considered pairable
             # & (df["is_dummy"] == 0) # Ensures that dummies are not included in our definition of pairable... but we do include missing?... metrics are due for a revision
     pairable = (
-        df["MatchLabel"].isin(MATCH_LABEL_GROUPS["True"]+ MATCH_LABEL_GROUPS["Wrong"]) & (df["is_dummy"] == 0)
+        df["MatchLabel"].isin(MATCH_LABEL_GROUPS["True"]+ MATCH_LABEL_GROUPS["Wrong"]) 
     ).groupby(df["mchID"]).any() 
 
     FakeNMissing = ~(
         ((df["IsSignal"] == 1)
-         & (df["is_dummy"] == 0)
+        #  & (df["is_dummy"] == 0)
          )
         .groupby(df["mchID"])
         .any()
@@ -346,11 +343,11 @@ def inhousemetrics(
         .all()
         )
 
-    is_reconstructed = (best[metric] > threshold) & (best["is_dummy"] == 0)
+    is_reconstructed = (best[metric] > threshold) 
     # --- true match correctly reconstructed ---
     is_true = best["IsSignal"] == 1 # a bit debatable since this includes the dummy candidates
     is_true_reconstructed = is_reconstructed & is_true
-    is_rejected = (best[metric] <= threshold) | (best["is_dummy"] == 1) #| (best["is_dummy"] == 1)
+    is_rejected = (best[metric] <= threshold)  #| (best["is_dummy"] == 1)
 
     N_total = len(best)
     N_pairable = pairable.sum()
@@ -367,10 +364,10 @@ def inhousemetrics(
     # --- Define metrics as (num, den) ---
     metrics = {
         "Purity": (N_gm_true, N_gm_rec),
-        # "Rec pairing efficiency": (N_gm_rec_pairable, N_pairable),
+        "Rec pairing efficiency": (N_gm_rec_pairable, N_pairable),
         "True pairing efficiency": (N_gm_true, N_pairable),
-        # "Wrong pairing fraction": (N_gm_rec_pairable - N_gm_true, N_pairable),
-        # "Rejection efficiency": (N_rejected_FakeNMissing, N_FakeNMissing),
+        "Wrong pairing fraction": (N_gm_rec_pairable - N_gm_true, N_pairable),
+        "Rejection efficiency": (N_rejected_FakeNMissing, N_FakeNMissing),
         "Missing fraction":(N_missing,N_pairable),
     }
 
@@ -469,6 +466,7 @@ def plot_metrics_vs_feature(
             print(f"[WARN] {metric} is all NaN → skipped")
             continue
 
+        
         fig.add_trace(
             go.Scatter(
                 x=subdf["bin_center"],
@@ -480,6 +478,14 @@ def plot_metrics_vs_feature(
                 ),
                 mode="markers+lines",
                 name=metric,
+                customdata=np.stack([subdf["num"].to_numpy(), subdf["den"].to_numpy()], axis=-1),
+                hovertemplate=(
+                    "x: %{x:.3f}<br>"
+                    "y: %{y:.3f}<br>"
+                    "num: %{customdata[0]}<br>"
+                    "den: %{customdata[1]}<br>"
+                    "<extra></extra>"
+                )
             )
         )
 

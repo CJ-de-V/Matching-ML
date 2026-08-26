@@ -161,14 +161,30 @@ def onnxinferxgb(df, features, model, targetname):
     )[0]
     return df
 
-def onnxinferlgbm(df, features, model, targetname):
+def onnxinferlgbm(df, features, model, targetname, batch_size=500_000):
+
     sess = ort.InferenceSession(model)
     input_name = sess.get_inputs()[0].name
-    pred = sess.run(
-        None,
-        {input_name: df[features].to_numpy(dtype=np.float32)}
-    )
-    df[targetname] = [p[1] for p in pred[1]]
+
+    scores = np.empty(len(df), dtype=np.float32)
+
+    for start in range(0, len(df), batch_size):
+        end = min(start + batch_size, len(df))
+
+        X = df.iloc[start:end][features].to_numpy(
+            dtype=np.float32,
+            copy=False
+        )
+
+        pred = sess.run(
+            None,
+            {input_name: X}
+        )
+
+        scores[start:end] = [p[1] for p in pred[1]]
+
+    df[targetname] = scores
+
     return df
 
 
@@ -268,5 +284,30 @@ def featuredecompositionplot(
     plt.tight_layout()
     plt.show()
 
+def plottruematchranking(df,scorecol="score", **kwargs):
+    # Rank candidates within each MCH group, highest score = rank 1
+    ranks = (
+        df.groupby("mchID")[scorecol]
+        .rank(method="first", ascending=False)
+    )
 
+    # Take the rank of the true match
+    true_ranks = ranks[df["IsSignal"] == 1]
+
+    # Plot
+    plt.figure(figsize=(8, 5))
+    plt.hist(
+        true_ranks,
+        bins=range(1, int(true_ranks.max()) + 2),
+        align="left",
+        rwidth=0.8,
+        **kwargs
+    )
+
+    plt.xlabel("Rank of true match")
+    plt.ylabel("Number of MCH groups")
+    plt.title("Ranking of true match within each MCH group")
+    plt.xticks(range(1, int(true_ranks.max()) + 1))
+    plt.tight_layout()
+    plt.show()
 
