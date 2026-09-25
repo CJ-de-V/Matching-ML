@@ -19,7 +19,7 @@ DESIGNED_FEATURES = [
     
     'SameSign', # SignMch == SignMFT
     
-    'DCAXY', 'RMFT'
+    'DCAXY', #'RMFT'
     
     'PullX', 'PullY', 'PullPhi', 'PullTanl', 'PullR', # residuals / sqrt(Cfeaturefeature) from covariance matrix
 
@@ -257,7 +257,7 @@ def perform_cuts(df: pd.DataFrame) -> pd.DataFrame:
     c1pt_vals = df["C1Pt1PtMFT"].to_numpy(dtype=np.float32, copy=False)
 
     # --- 1) Loose eta window --- made even looser to track if we're losing tracks in this region, ideally -3.6--2.5, currently expanded
-    eta_mask = (eta_vals >= -20) & (eta_vals <= 17)
+    eta_mask = (eta_vals >= -200) & (eta_vals <= 170)
     removed_eta_rows = int((~eta_mask).sum())
     removed_eta_sig = int(signal_values[~eta_mask].sum())
     removed_eta_bkg = removed_eta_rows - removed_eta_sig
@@ -363,12 +363,13 @@ def inhousemetrics(
 
     # --- Define metrics as (num, den) ---
     metrics = {
-        "Purity": (N_gm_true, N_gm_rec),
-        "Rec pairing efficiency": (N_gm_rec_pairable, N_pairable),
-        "True pairing efficiency": (N_gm_true, N_pairable),
+        # "Purity": (N_gm_true, N_gm_rec),
+        # "Rec pairing efficiency": (N_gm_rec_pairable, N_pairable),
+        # "True pairing efficiency": (N_gm_true, N_pairable),
         "Wrong pairing fraction": (N_gm_rec_pairable - N_gm_true, N_pairable),
-        "Rejection efficiency": (N_rejected_FakeNMissing, N_FakeNMissing),
+        # "Rejection efficiency": (N_rejected_FakeNMissing, N_FakeNMissing),
         "Missing fraction":(N_missing,N_pairable),
+        "Misranked fraction": (N_gm_rec_pairable - N_gm_true - N_missing, N_pairable), # Prototype
     }
 
     rows = []
