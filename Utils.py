@@ -6,6 +6,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from hipe4ml.tree_handler import TreeHandler
 from typing import Optional, Union
+from scipy.stats import ks_2samp
 
 plt.rcParams['axes.grid'] = True
 plt.rcParams['grid.color'] = 'gray'
@@ -60,10 +61,17 @@ ALL_FEATURES = ['fXMCH', 'fYMCH', 'fPhiMCH', 'fTanlMCH', 'fInvQPtMCH', 'fTimeMCH
        'fDCAX', 'fDCAY', 'fIsAmbig', 'fMFTMult', 'fMatchAttempts',
        'fMcMaskMCH', 'fMcMaskMFT', 'fMcMaskGlob', 'fMatchLabel', 'fIsSignal']
 
+
+FEATURES_NO_TRASH =['XMCH', 'YMCH', 'PhiMCH', 'TanlMCH', 'InvQPtMCH',
+       'Chi2MCH', 'PDCA', 'Rabs','XMFT', 'YMFT', 'PhiMFT',
+       'TanlMFT', 'InvQPtMFT', 'Chi2MFT','TrackTypeMFT',
+       'DCAX', 'DCAY', 'IsAmbig', 'MFTMult', 'MatchAttempts',
+        'MatchLabel', 'IsSignal'] + DESIGNED_FEATURES
+
 SKIPPED_FEATURES  = [
     'fTimeMCH', 'fTimeResMCH', 'fTimeMFT', 'fTimeResMFT', 
     'fMftClusterSizesAndTrackFlags', 
-    'fChi2Glob', 'fChi2Match',
+    'fChi2Glob', # 'fChi2Match',
     'fMcMaskMCH', 'fMcMaskMFT', 'fMcMaskGlob',
     ]
 
@@ -81,7 +89,9 @@ MATCH_LABEL_GROUPS = {
     "Wrong": [1, 5],
     "Decay": [2, 6],
     "Fake":  [3, 7],
-    "Unknown": [8], 
+    "Non-True": [1, 2, 3, 5, 6, 7],
+    "MC-Total": [0, 1, 2, 3, 4, 5, 6, 7],
+    "Data": [8], 
 }
 
 MATCH_COLOURS = {
@@ -89,7 +99,9 @@ MATCH_COLOURS = {
     "Wrong": "red",
     "Decay": "lime",
     "Fake":  "mediumblue",
-    "Unknown": "gray",
+    "Non-True": "orange",
+    "MC-Total": "purple",
+    "Data": "gray",
 }
 
 def subsample(df: pd.DataFrame, frac: float = 0.5) -> pd.DataFrame:
@@ -363,11 +375,11 @@ def inhousemetrics(
 
     # --- Define metrics as (num, den) ---
     metrics = {
-        # "Purity": (N_gm_true, N_gm_rec),
-        # "Rec pairing efficiency": (N_gm_rec_pairable, N_pairable),
-        # "True pairing efficiency": (N_gm_true, N_pairable),
+        "Purity": (N_gm_true, N_gm_rec),
+        "Rec pairing efficiency": (N_gm_rec_pairable, N_pairable),
+        "True pairing efficiency": (N_gm_true, N_pairable),
         "Wrong pairing fraction": (N_gm_rec_pairable - N_gm_true, N_pairable),
-        # "Rejection efficiency": (N_rejected_FakeNMissing, N_FakeNMissing),
+        "Rejection efficiency": (N_rejected_FakeNMissing, N_FakeNMissing),
         "Missing fraction":(N_missing,N_pairable),
         "Misranked fraction": (N_gm_rec_pairable - N_gm_true - N_missing, N_pairable), # Prototype
     }
@@ -1319,3 +1331,76 @@ def pairing_purity_curve(
 
     points_df = pd.DataFrame({"threshold": thresh_s, "true_pairing_eff": x_s, "purity": y_s})
     return auc_val, points_df
+
+
+def compare_distributions(df_a, df_b, trim=0):
+    """
+    Compare the distributions of corresponding columns in two DataFrames.
+
+    Parameters
+    ----------
+    df_a, df_b : pandas.DataFrame
+        DataFrames containing the samples to compare. Only columns present
+        in both DataFrames are compared.
+
+    trim : float, default=0
+        Percentage of samples to trim from EACH tail of each distribution,
+        independently. For example, 1 removes the lowest 1% and highest 1%
+        of each distribution.
+
+    Returns
+    -------
+    pandas.DataFrame
+        One row per feature, with columns:
+        - feature: column name
+        - KS: Kolmogorov-Smirnov statistic
+        - TV: Total Variation distance
+
+        Both metrics range from 0 (identical distributions) to 1
+        (maximally different distributions).
+    """
+
+    results = []
+
+    for col in df_a.columns:
+        # Convert to numeric arrays and discard NaN/inf values.
+        a = pd.to_numeric(df_a[col], errors="coerce").to_numpy(dtype=float)
+        b = pd.to_numeric(df_b[col], errors="coerce").to_numpy(dtype=float)
+
+        # Trim each distribution independently using its own quantiles.
+        # This removes extreme tails without requiring matching sample sizes.
+        if trim > 0:
+            low_q = trim
+            high_q = 1 - low_q
+
+            a_low, a_high = np.quantile(a, [low_q, high_q])
+            b_low, b_high = np.quantile(b, [low_q, high_q])
+
+            a = a[(a >= a_low) & (a <= a_high)]
+            b = b[(b >= b_low) & (b <= b_high)]
+
+        # KS compares empirical CDFs directly; no histogram binning needed.
+        ks = ks_2samp(a, b).statistic
+
+        # Use shared histogram bin edges for both distributions.
+        # TV is half the integrated absolute difference between normalized PDFs.
+        combined = np.concatenate([a, b])
+        bin_edges = np.histogram_bin_edges(combined, bins=500) # opted for an arbitrary 500 bins instead of trusting "auto"
+
+        hist_a, _ = np.histogram(a, bins=bin_edges, density=True)
+        hist_b, _ = np.histogram(b, bins=bin_edges, density=True)
+
+        bin_widths = np.diff(bin_edges)
+        tv = 0.5 * np.sum(np.abs(hist_a - hist_b) * bin_widths)
+
+        results.append({
+            "feature": col,
+            "KS": ks,
+            "TV": tv,
+        })
+
+    return (
+        pd.DataFrame(results)
+        # .set_index("feature")
+        # .sort_values("TV", ascending=False)
+    )
